@@ -156,6 +156,18 @@ async function saveMotivation(playerId, month, value) {
   if (error) throw error;
 }
 
+async function addPlayerToDB(player) {
+  const { data, error } = await sb.from('players').insert({
+    name: player.name,
+    position: player.position,
+    email: player.email,
+    age: Number(player.age),
+    plan: player.plan,
+  }).select().single();
+  if (error) throw error;
+  return { ...data, data: { squat:[], bench:[], sprint:[], cmj:[], plank:[] }, motivation: {} };
+}
+
 /* ---------- UI Bausteine ---------- */
 function Card({ children, style }) {
   return React.createElement("div", {
@@ -176,33 +188,92 @@ const fieldStyle = {
   color: C.text, padding: "10px 12px", fontSize: 15, width: "100%", outline: "none", fontFamily: "inherit",
 };
 
+const EMPTY_FORM = { name: "", position: "", email: "", age: "", plan: "" };
+const POSITION_OPTIONS = ["Torwart","Linksaußen","Rückraum Links","Rückraum Mitte","Rückraum Rechts","Rechtsaußen","Kreisläufer"];
+const PLAN_OPTIONS = ["Kraft Aufbau","Athletik Basis","Reha / Prävention","Maximalkraft"];
+
 /* ---------- Spielerliste ---------- */
-function PlayerList({ players, onSelect }) {
+function PlayerList({ players, onSelect, onAdd }) {
   const [q, setQ] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
   const filtered = players.filter(p =>
     p.name.toLowerCase().includes(q.toLowerCase()) || p.position.toLowerCase().includes(q.toLowerCase()));
+
+  async function handleAdd() {
+    if (!form.name.trim()) { setErr("Name ist Pflichtfeld."); return; }
+    setSaving(true); setErr("");
+    try {
+      const newPlayer = await addPlayerToDB(form);
+      onAdd(newPlayer);
+      setForm(EMPTY_FORM);
+      setShowForm(false);
+    } catch(e) { setErr("Fehler: " + e.message); }
+    setSaving(false);
+  }
+
+  const f = (k, label, type = "text", opts = null) =>
+    React.createElement("div", { key: k },
+      React.createElement("label", { style: { fontSize: 12, opacity: 0.7, display: "block", marginBottom: 4 } }, label),
+      opts
+        ? React.createElement("select", { value: form[k], onChange: e => setForm({ ...form, [k]: e.target.value }), style: fieldStyle },
+            React.createElement("option", { value: "" }, "— wählen —"),
+            opts.map(o => React.createElement("option", { key: o, value: o }, o))
+          )
+        : React.createElement("input", { type, value: form[k], onChange: e => setForm({ ...form, [k]: e.target.value }), style: fieldStyle })
+    );
+
   return React.createElement("div", null,
-    React.createElement("div", { style: { marginBottom: 18 } },
-      React.createElement("h1", { style: { fontFamily: "'Saira Condensed', sans-serif", fontSize: 30, fontWeight: 700, margin: 0, letterSpacing: 0.5 } }, "KADER"),
-      React.createElement("p", { style: { margin: "2px 0 0", opacity: 0.7, fontSize: 14 } }, `${players.length} Athleten · Stand ${MONTHS[MONTHS.length-1].full}`)
+    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 } },
+      React.createElement("div", null,
+        React.createElement("h1", { style: { fontFamily: "'Saira Condensed', sans-serif", fontSize: 30, fontWeight: 700, margin: 0, letterSpacing: 0.5 } }, "KADER"),
+        React.createElement("p", { style: { margin: "2px 0 0", opacity: 0.7, fontSize: 14 } }, `${players.length} Athleten · Stand ${MONTHS[MONTHS.length-1].full}`)
+      ),
+      React.createElement("button", {
+        onClick: () => { setShowForm(!showForm); setErr(""); },
+        style: { background: showForm ? "transparent" : C.accent, color: showForm ? C.accent : "#060c27", border: `1px solid ${C.accent}`, borderRadius: 10, padding: "8px 16px", fontSize: 14, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, flexShrink: 0 }
+      }, showForm ? "✕ Abbrechen" : "+ Spieler")
     ),
+
+    showForm && React.createElement(Card, { style: { marginBottom: 16 } },
+      React.createElement(SectionTitle, null, "Neuen Spieler anlegen"),
+      React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+        f("name", "Name *"),
+        f("position", "Position", "text", POSITION_OPTIONS),
+        f("email", "E-Mail", "email"),
+        f("age", "Alter", "number"),
+        f("plan", "Trainingsplan", "text", PLAN_OPTIONS),
+      ),
+      err && React.createElement("p", { style: { color: "#ef4444", fontSize: 13, margin: "8px 0 0" } }, err),
+      React.createElement("button", {
+        onClick: handleAdd, disabled: saving,
+        style: { marginTop: 14, width: "100%", background: C.accent, color: "#060c27", border: "none", borderRadius: 10, padding: "12px", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }
+      }, saving ? "Wird gespeichert…" : "Spieler speichern")
+    ),
+
     React.createElement("input", { placeholder: "Suche nach Name oder Position…", value: q, onChange: e => setQ(e.target.value), style: { ...fieldStyle, marginBottom: 16 } }),
-    React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
-      filtered.map(p => React.createElement("button", {
-        key: p.id, onClick: () => onSelect(p.id),
-        style: { display: "flex", alignItems: "center", gap: 14, background: C.cardBg, border: `1px solid ${C.cardBorder}`, borderRadius: 14, padding: "12px 14px", color: C.text, textAlign: "left", cursor: "pointer", fontFamily: "inherit" }
-      },
-        React.createElement("div", { style: { width: 42, height: 42, borderRadius: "50%", background: "rgba(72,207,253,0.15)", border: `1px solid ${C.accent}`, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Saira Condensed', sans-serif", fontWeight: 700, fontSize: 17, color: C.accent, flexShrink: 0 } },
-          p.name.split(" ").map(n => n[0]).join("")
-        ),
-        React.createElement("div", { style: { flex: 1, minWidth: 0 } },
-          React.createElement("div", { style: { fontWeight: 600, fontSize: 16 } }, p.name),
-          React.createElement("div", { style: { opacity: 0.65, fontSize: 13 } }, p.position)
-        ),
-        React.createElement(MotDot, { value: p.motivation[CURRENT_MONTH] }),
-        React.createElement("span", { style: { color: C.accent, fontSize: 20, lineHeight: 1 } }, "›")
-      ))
-    )
+
+    players.length === 0
+      ? React.createElement("div", { style: { textAlign: "center", opacity: 0.5, padding: "40px 0", fontSize: 14 } }, "Noch keine Spieler. Klick auf '+ Spieler' um den ersten anzulegen.")
+      : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+          filtered.map(p => React.createElement("button", {
+            key: p.id, onClick: () => onSelect(p.id),
+            style: { display: "flex", alignItems: "center", gap: 14, background: C.cardBg, border: `1px solid ${C.cardBorder}`, borderRadius: 14, padding: "12px 14px", color: C.text, textAlign: "left", cursor: "pointer", fontFamily: "inherit" }
+          },
+            React.createElement("div", { style: { width: 42, height: 42, borderRadius: "50%", background: "rgba(72,207,253,0.15)", border: `1px solid ${C.accent}`, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Saira Condensed', sans-serif", fontWeight: 700, fontSize: 17, color: C.accent, flexShrink: 0 } },
+              p.name.split(" ").filter(Boolean).map(n => n[0]).join("")
+            ),
+            React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+              React.createElement("div", { style: { fontWeight: 600, fontSize: 16 } }, p.name),
+              React.createElement("div", { style: { opacity: 0.65, fontSize: 13 } }, p.position || "—")
+            ),
+            React.createElement(MotDot, { value: p.motivation[CURRENT_MONTH] }),
+            React.createElement("span", { style: { color: C.accent, fontSize: 20, lineHeight: 1 } }, "›")
+          ))
+        )
   );
 }
 
@@ -378,13 +449,16 @@ function App() {
       .catch(err => {
         var b = document.getElementById('error-box');
         b.style.display = 'block';
-        b.textContent = 'Supabase Fehler: ' + err.message + ' — Bitte URL und Key in Zeile 42/43 prüfen.';
+        b.textContent = 'Supabase Fehler: ' + err.message + ' — Bitte URL und Key prüfen.';
         setLoading(false);
       });
   }, []);
 
   function updatePlayer(updated) {
     setPlayers(prev => prev.map(p => p.id === updated.id ? updated : p));
+  }
+  function addPlayer(newPlayer) {
+    setPlayers(prev => [...prev, newPlayer].sort((a, b) => a.name.localeCompare(b.name)));
   }
 
   if (loading) return React.createElement("div", { style: { padding: 40, textAlign: "center", opacity: 0.6, fontFamily: "'Saira', sans-serif" } }, "Daten werden geladen…");
@@ -395,7 +469,7 @@ function App() {
     React.createElement("div", { style: { maxWidth: 480, margin: "0 auto" } },
       selected
         ? React.createElement(PlayerDetail, { player: selected, onBack: () => setSelectedId(null), onUpdate: updatePlayer })
-        : React.createElement(PlayerList, { players, onSelect: setSelectedId })
+        : React.createElement(PlayerList, { players, onSelect: setSelectedId, onAdd: addPlayer })
     )
   );
 }

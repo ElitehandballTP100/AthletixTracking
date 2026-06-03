@@ -113,8 +113,27 @@ async function savePlayer(player) {
     email: player.email, age: Number(player.age), plan: player.plan,
     weight: player.weight ? Number(player.weight) : null,
     height: player.height ? Number(player.height) : null,
+    plan_start_date: player.plan_start_date || null,
   });
   if (error) throw error;
+}
+
+async function deletePlayerFromDB(playerId) {
+  await sb.from('measurements').delete().eq('player_id', playerId);
+  await sb.from('motivation').delete().eq('player_id', playerId);
+  const { error } = await sb.from('players').delete().eq('id', playerId);
+  if (error) throw error;
+}
+
+function calcTrainingWeek(startDate) {
+  if (!startDate) return null;
+  const start = new Date(startDate);
+  const now = new Date();
+  start.setHours(0,0,0,0);
+  now.setHours(0,0,0,0);
+  const diffMs = now - start;
+  if (diffMs < 0) return null;
+  return Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000)) + 1;
 }
 
 async function saveMeasurement(playerId, metricId, month, value) {
@@ -138,6 +157,7 @@ async function addPlayerToDB(player) {
     name: player.name, position: player.position, email: player.email,
     age: Number(player.age) || null, plan: player.plan,
     weight: Number(player.weight) || null, height: Number(player.height) || null,
+    plan_start_date: player.plan_start_date || null,
   }).select().single();
   if (error) throw error;
   const emptyData = {};
@@ -177,7 +197,7 @@ const fieldStyle = {
 };
 
 /* ---------- Spielerliste ---------- */
-const EMPTY_FORM = { name: "", position: "", email: "", age: "", plan: "", weight: "", height: "" };
+const EMPTY_FORM = { name: "", position: "", email: "", age: "", plan: "", weight: "", height: "", plan_start_date: "" };
 
 function PlayerList({ players, onSelect, onAdd }) {
   const [q, setQ] = useState("");
@@ -229,6 +249,7 @@ function PlayerList({ players, onSelect, onAdd }) {
         field("name", "Name *"),
         field("position", "Position", "text", POSITION_OPTIONS),
         field("plan", "Trainingsplan", "text", PLAN_OPTIONS),
+        field("plan_start_date", "Trainingsplan Startdatum", "date"),
         field("email", "E-Mail", "email"),
         field("age", "Alter", "number"),
         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 } },
@@ -308,7 +329,7 @@ function DevSummary({ player }) {
 }
 
 /* ---------- Detailansicht ---------- */
-function PlayerDetail({ player, onBack, onUpdate }) {
+function PlayerDetail({ player, onBack, onUpdate, onDelete }) {
   const [selMetric, setSelMetric] = useState(METRICS[0].id);
   const [editInfo, setEditInfo] = useState(false);
   const [form, setForm] = useState({ ...player });
@@ -316,8 +337,11 @@ function PlayerDetail({ player, onBack, onUpdate }) {
   const [meMonth, setMeMonth] = useState(CURRENT_MONTH);
   const [meValue, setMeValue] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [motMonth, setMotMonth] = useState(CURRENT_MONTH);
 
+  const trainingWeek = calcTrainingWeek(player.plan_start_date);
   const metric = METRICS.find(m => m.id === selMetric);
 
   const chartData = useMemo(() => {
@@ -330,11 +354,19 @@ function PlayerDetail({ player, onBack, onUpdate }) {
   async function saveInfo() {
     setSaving(true);
     try {
-      const updated = { ...player, ...form, age: Number(form.age), weight: Number(form.weight)||null, height: Number(form.height)||null };
+      const updated = { ...player, ...form, age: Number(form.age), weight: Number(form.weight)||null, height: Number(form.height)||null, plan_start_date: form.plan_start_date || null };
       await savePlayer(updated);
       onUpdate(updated); setEditInfo(false);
     } catch(e) { alert("Fehler: " + e.message); }
     setSaving(false);
+  }
+
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      await deletePlayerFromDB(player.id);
+      onDelete(player.id);
+    } catch(e) { alert("Fehler beim Löschen: " + e.message); setDeleting(false); }
   }
 
   async function addMeasurement() {
@@ -389,6 +421,7 @@ function PlayerDetail({ player, onBack, onUpdate }) {
             editField("name", "Name"),
             editField("position", "Position", "text", POSITION_OPTIONS),
             editField("plan", "Trainingsplan", "text", PLAN_OPTIONS),
+            editField("plan_start_date", "Trainingsplan Startdatum", "date"),
             editField("email", "E-Mail", "email"),
             editField("age", "Alter", "number"),
             React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 } },
@@ -396,14 +429,43 @@ function PlayerDetail({ player, onBack, onUpdate }) {
               editField("height", "Größe (cm)", "number")
             )
           )
-        : React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 14px" } },
-            React.createElement(Info, { label: "Position",      value: player.position }),
-            React.createElement(Info, { label: "Alter",         value: player.age ? `${player.age} Jahre` : null }),
-            React.createElement(Info, { label: "Gewicht",       value: player.weight ? `${player.weight} kg` : null }),
-            React.createElement(Info, { label: "Größe",         value: player.height ? `${player.height} cm` : null }),
-            React.createElement(Info, { label: "E-Mail",        value: player.email, full: true }),
-            React.createElement(Info, { label: "Trainingsplan", value: player.plan, accent: true, full: true })
-          )
+        : React.createElement("div", null,
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 14px", marginBottom: trainingWeek ? 12 : 0 } },
+              React.createElement(Info, { label: "Position",      value: player.position }),
+              React.createElement(Info, { label: "Alter",         value: player.age ? `${player.age} Jahre` : null }),
+              React.createElement(Info, { label: "Gewicht",       value: player.weight ? `${player.weight} kg` : null }),
+              React.createElement(Info, { label: "Größe",         value: player.height ? `${player.height} cm` : null }),
+              React.createElement(Info, { label: "E-Mail",        value: player.email, full: true }),
+              React.createElement(Info, { label: "Trainingsplan", value: player.plan, accent: true, full: true }),
+              player.plan_start_date && React.createElement(Info, { label: "Trainingsstart", value: new Date(player.plan_start_date).toLocaleDateString('de-DE'), full: false })
+            ),
+            trainingWeek && React.createElement("div", { style: { marginTop: 8, background: "rgba(72,207,253,0.12)", border: `1px solid ${C.accent}`, borderRadius: 12, padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" } },
+              React.createElement("span", { style: { fontSize: 13, opacity: 0.8 } }, "Aktuelle Trainingswoche"),
+              React.createElement("span", { style: { fontFamily: "'Saira Condensed', sans-serif", fontSize: 26, fontWeight: 700, color: C.accent, lineHeight: 1 } }, `KW ${trainingWeek}`)
+            )
+          ),
+
+      /* --- Spieler löschen --- */
+      !editInfo && React.createElement("div", { style: { marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.cardBorder}` } },
+        !confirmDelete
+          ? React.createElement("button", {
+              onClick: () => setConfirmDelete(true),
+              style: { background: "transparent", color: "#ef4444", border: "1px solid #ef4444", borderRadius: 8, padding: "6px 14px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }
+            }, "Spieler löschen")
+          : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
+              React.createElement("p", { style: { fontSize: 13, color: "#ef4444", margin: 0 } }, `Wirklich „${player.name}" und alle zugehörigen Daten löschen?`),
+              React.createElement("div", { style: { display: "flex", gap: 8 } },
+                React.createElement("button", {
+                  onClick: handleDelete, disabled: deleting,
+                  style: { background: "#ef4444", color: "#fff", border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }
+                }, deleting ? "Wird gelöscht…" : "Ja, löschen"),
+                React.createElement("button", {
+                  onClick: () => setConfirmDelete(false),
+                  style: { background: "transparent", color: C.text, border: `1px solid ${C.cardBorder}`, borderRadius: 8, padding: "7px 16px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }
+                }, "Abbrechen")
+              )
+            )
+      )
     ),
 
     /* --- Entwicklungsübersicht --- */
@@ -514,13 +576,14 @@ function App() {
 
   function updatePlayer(updated) { setPlayers(prev => prev.map(p => p.id === updated.id ? updated : p)); }
   function addPlayer(p) { setPlayers(prev => [...prev, p].sort((a, b) => a.name.localeCompare(b.name))); }
+  function removePlayer(id) { setPlayers(prev => prev.filter(p => p.id !== id)); setSelectedId(null); }
 
   if (loading) return React.createElement("div", { style: { padding: 40, textAlign: "center", opacity: 0.6, fontFamily: "'Saira', sans-serif" } }, "Daten werden geladen…");
 
   return React.createElement("div", { style: { background: C.bg, minHeight: "100vh", color: C.text, fontFamily: "'Saira', sans-serif", padding: "20px 16px 60px" } },
     React.createElement("div", { style: { maxWidth: 480, margin: "0 auto" } },
       selected
-        ? React.createElement(PlayerDetail, { player: selected, onBack: () => setSelectedId(null), onUpdate: updatePlayer })
+        ? React.createElement(PlayerDetail, { player: selected, onBack: () => setSelectedId(null), onUpdate: updatePlayer, onDelete: removePlayer })
         : React.createElement(PlayerList, { players, onSelect: setSelectedId, onAdd: addPlayer })
     )
   );

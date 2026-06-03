@@ -319,19 +319,22 @@ function DevSummary({ player }) {
 
   return React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
     summary.map(m => {
+      const isWeight = m.id === "weight";
       const arrow = m.diff > 0 ? "↑" : m.diff < 0 ? "↓" : "→";
-      const color = m.positive === true ? "#22c55e" : m.positive === false ? "#ef4444" : C.accent;
+      // Gewicht: immer neutral (kein grün/rot)
+      const color = isWeight ? C.accent : (m.positive === true ? "#22c55e" : m.positive === false ? "#ef4444" : C.accent);
       const barW = Math.min(Math.abs(m.pct), 100);
-      // Für Sprint (niedriger=besser): Prozent als positiv anzeigen wenn Verbesserung
       const displayPct = m.higherBetter === false ? -m.pct : m.pct;
       return React.createElement("div", { key: m.id, style: { background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: "10px 12px" } },
-        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 } },
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: isWeight ? 0 : 6 } },
           React.createElement("span", { style: { fontSize: 13, fontWeight: 600 } }, m.name),
           React.createElement("span", { style: { fontSize: 13, color, fontWeight: 700 } },
-            `${arrow} ${m.diff > 0 ? "+" : ""}${m.id === "sprint" ? m.diff.toFixed(2) : Math.round(m.diff)} ${m.unit} (${displayPct > 0 ? "+" : ""}${displayPct.toFixed(1)}%)`
+            isWeight
+              ? `${arrow} ${m.diff > 0 ? "+" : ""}${Math.round(m.diff * 10) / 10} ${m.unit}  ·  ${m.first} → ${m.last} ${m.unit}`
+              : `${arrow} ${m.diff > 0 ? "+" : ""}${m.id === "sprint" ? m.diff.toFixed(2) : Math.round(m.diff)} ${m.unit} (${displayPct > 0 ? "+" : ""}${displayPct.toFixed(1)}%)`
           )
         ),
-        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 11, opacity: 0.6 } },
+        !isWeight && React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 11, opacity: 0.6 } },
           React.createElement("span", null, `Start: ${m.first} ${m.unit}`),
           React.createElement("div", { style: { flex: 1, height: 4, background: "rgba(255,255,255,0.1)", borderRadius: 2 } },
             React.createElement("div", { style: { width: `${barW}%`, height: "100%", background: color, borderRadius: 2, transition: "width 0.4s" } })
@@ -513,19 +516,38 @@ function PlayerDetail({ player, onBack, onUpdate, onDelete }) {
         }, m.name))
       ),
 
-      /* Chart */
-      React.createElement("div", { style: { height: 220, marginLeft: -10 } },
-        chartData.length > 0
-          ? React.createElement(ResponsiveContainer, { width: "100%", height: "100%" },
-              React.createElement(LineChart, { data: chartData, margin: { top: 10, right: 10, bottom: 0, left: 0 } },
-                React.createElement(CartesianGrid, { stroke: "rgba(255,255,255,0.08)" }),
-                React.createElement(XAxis, { dataKey: "label", stroke: "rgba(255,255,255,0.6)", tick: { fontSize: 12 } }),
-                React.createElement(YAxis, { stroke: "rgba(255,255,255,0.6)", tick: { fontSize: 12 }, width: 38, domain: ["auto","auto"] }),
-                React.createElement(Tooltip, { contentStyle: { background: "#060c27", border: `1px solid ${C.accent}`, borderRadius: 10, color: "#fff" }, formatter: v => [`${v} ${metric.unit}`, metric.name] }),
-                React.createElement(Line, { type: "monotone", dataKey: "value", stroke: C.accent, strokeWidth: 3, dot: { r: 4, fill: C.accent }, activeDot: { r: 6 } })
-              )
+      /* Chart oder Gewichtsverlauf */
+      React.createElement("div", { style: { minHeight: 120, marginLeft: -10 } },
+        selMetric === "weight"
+          ? (chartData.length === 0
+              ? React.createElement("div", { style: { height: 120, display: "flex", alignItems: "center", justifyContent: "center", opacity: 0.4, fontSize: 13 } }, "Noch keine Gewichtsdaten")
+              : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, paddingLeft: 10 } },
+                  chartData.map((d, i) => {
+                    const prev = chartData[i - 1];
+                    const diff = prev ? d.value - prev.value : null;
+                    const arrow = diff === null ? null : diff > 0 ? "↑" : diff < 0 ? "↓" : "→";
+                    return React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 10, background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "8px 12px" } },
+                      React.createElement("span", { style: { fontSize: 12, opacity: 0.6, width: 28, flexShrink: 0 } }, d.label),
+                      React.createElement("span", { style: { fontSize: 15, fontWeight: 700, color: C.accent } }, `${d.value} kg`),
+                      diff !== null && React.createElement("span", { style: { fontSize: 12, color: "rgba(255,255,255,0.5)", marginLeft: "auto" } },
+                        `${arrow} ${diff > 0 ? "+" : ""}${(Math.round(diff * 10) / 10)} kg`
+                      )
+                    );
+                  })
+                )
             )
-          : React.createElement("div", { style: { height: "100%", display: "flex", alignItems: "center", justifyContent: "center", opacity: 0.4, fontSize: 13 } }, "Noch keine Daten für diese Metrik")
+          : (chartData.length > 0
+              ? React.createElement(ResponsiveContainer, { width: "100%", height: 220 },
+                  React.createElement(LineChart, { data: chartData, margin: { top: 10, right: 10, bottom: 0, left: 0 } },
+                    React.createElement(CartesianGrid, { stroke: "rgba(255,255,255,0.08)" }),
+                    React.createElement(XAxis, { dataKey: "label", stroke: "rgba(255,255,255,0.6)", tick: { fontSize: 12 } }),
+                    React.createElement(YAxis, { stroke: "rgba(255,255,255,0.6)", tick: { fontSize: 12 }, width: 38, domain: ["auto","auto"] }),
+                    React.createElement(Tooltip, { contentStyle: { background: "#060c27", border: `1px solid ${C.accent}`, borderRadius: 10, color: "#fff" }, formatter: v => [`${v} ${metric.unit}`, metric.name] }),
+                    React.createElement(Line, { type: "monotone", dataKey: "value", stroke: C.accent, strokeWidth: 3, dot: { r: 4, fill: C.accent }, activeDot: { r: 6 } })
+                  )
+                )
+              : React.createElement("div", { style: { height: 220, display: "flex", alignItems: "center", justifyContent: "center", opacity: 0.4, fontSize: 13 } }, "Noch keine Daten für diese Metrik")
+            )
       ),
       React.createElement("p", { style: { textAlign: "center", fontSize: 12, opacity: 0.6, margin: "6px 0 0" } },
         `${metric.name} in ${metric.unit}${metric.higherBetter === true ? " · höher = besser" : metric.higherBetter === false ? " · niedriger = besser" : ""}`

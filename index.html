@@ -93,6 +93,8 @@ async function loadPlayers() {
   if (e2) throw e2;
   const { data: motivation, error: e3 } = await sb.from('motivation').select('*');
   if (e3) throw e3;
+  const { data: notesData, error: e4 } = await sb.from('notes').select('*');
+  if (e4) throw e4;
   return players.map(p => {
     const data = {};
     METRICS.forEach(m => {
@@ -103,7 +105,9 @@ async function loadPlayers() {
     });
     const motMap = {};
     motivation.filter(r => r.player_id === p.id).forEach(r => { motMap[r.month] = r.value; });
-    return { ...p, data, motivation: motMap };
+    const notesMap = {};
+    (notesData || []).filter(r => r.player_id === p.id).forEach(r => { notesMap[r.month] = r.text; });
+    return { ...p, data, motivation: motMap, notes: notesMap };
   });
 }
 
@@ -121,6 +125,7 @@ async function savePlayer(player) {
 async function deletePlayerFromDB(playerId) {
   await sb.from('measurements').delete().eq('player_id', playerId);
   await sb.from('motivation').delete().eq('player_id', playerId);
+  await sb.from('notes').delete().eq('player_id', playerId);
   const { error } = await sb.from('players').delete().eq('id', playerId);
   if (error) throw error;
 }
@@ -147,6 +152,14 @@ async function saveMeasurement(playerId, metricId, month, value) {
 async function saveMotivation(playerId, month, value) {
   const { error } = await sb.from('motivation').upsert(
     { player_id: playerId, month, value },
+    { onConflict: 'player_id,month' }
+  );
+  if (error) throw error;
+}
+
+async function saveNote(playerId, month, text) {
+  const { error } = await sb.from('notes').upsert(
+    { player_id: playerId, month, text },
     { onConflict: 'player_id,month' }
   );
   if (error) throw error;
@@ -309,11 +322,13 @@ function DevSummary({ player }) {
       const arrow = m.diff > 0 ? "↑" : m.diff < 0 ? "↓" : "→";
       const color = m.positive === true ? "#22c55e" : m.positive === false ? "#ef4444" : C.accent;
       const barW = Math.min(Math.abs(m.pct), 100);
+      // Für Sprint (niedriger=besser): Prozent als positiv anzeigen wenn Verbesserung
+      const displayPct = m.higherBetter === false ? -m.pct : m.pct;
       return React.createElement("div", { key: m.id, style: { background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: "10px 12px" } },
         React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 } },
           React.createElement("span", { style: { fontSize: 13, fontWeight: 600 } }, m.name),
           React.createElement("span", { style: { fontSize: 13, color, fontWeight: 700 } },
-            `${arrow} ${m.diff > 0 ? "+" : ""}${m.id === "sprint" ? m.diff.toFixed(2) : Math.round(m.diff)} ${m.unit} (${m.pct > 0 ? "+" : ""}${m.pct.toFixed(1)}%)`
+            `${arrow} ${m.diff > 0 ? "+" : ""}${m.id === "sprint" ? m.diff.toFixed(2) : Math.round(m.diff)} ${m.unit} (${displayPct > 0 ? "+" : ""}${displayPct.toFixed(1)}%)`
           )
         ),
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 11, opacity: 0.6 } },
@@ -340,6 +355,9 @@ function PlayerDetail({ player, onBack, onUpdate, onDelete }) {
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [motMonth, setMotMonth] = useState(CURRENT_MONTH);
+  const [noteMonth, setNoteMonth] = useState(CURRENT_MONTH);
+  const [noteText, setNoteText] = useState(player.notes ? (player.notes[CURRENT_MONTH] || "") : "");
+  const [savingNote, setSavingNote] = useState(false);
 
   const trainingWeek = calcTrainingWeek(player.plan_start_date);
   const metric = METRICS.find(m => m.id === selMetric);
@@ -392,6 +410,15 @@ function PlayerDetail({ player, onBack, onUpdate, onDelete }) {
     } catch(e) { alert("Fehler: " + e.message); }
   }
 
+  async function handleSaveNote() {
+    setSavingNote(true);
+    try {
+      await saveNote(player.id, noteMonth, noteText);
+      onUpdate({ ...player, notes: { ...(player.notes || {}), [noteMonth]: noteText } });
+    } catch(e) { alert("Fehler: " + e.message); }
+    setSavingNote(false);
+  }
+
   function editField(k, label, type = "text", opts = null) {
     return React.createElement("div", { key: k },
       React.createElement("label", { style: { fontSize: 12, opacity: 0.7 } }, label),
@@ -441,7 +468,7 @@ function PlayerDetail({ player, onBack, onUpdate, onDelete }) {
             ),
             trainingWeek && React.createElement("div", { style: { marginTop: 8, background: "rgba(72,207,253,0.12)", border: `1px solid ${C.accent}`, borderRadius: 12, padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" } },
               React.createElement("span", { style: { fontSize: 13, opacity: 0.8 } }, "Aktuelle Trainingswoche"),
-              React.createElement("span", { style: { fontFamily: "'Saira Condensed', sans-serif", fontSize: 26, fontWeight: 700, color: C.accent, lineHeight: 1 } }, `KW ${trainingWeek}`)
+              React.createElement("span", { style: { fontFamily: "'Saira Condensed', sans-serif", fontSize: 26, fontWeight: 700, color: C.accent, lineHeight: 1 } }, `TW ${trainingWeek}`)
             )
           ),
 
@@ -550,6 +577,35 @@ function PlayerDetail({ player, onBack, onUpdate, onDelete }) {
               MOT[key].label
             );
           })
+        )
+      )
+    ),
+
+    /* --- Notizen --- */
+    React.createElement(Card, { style: { marginTop: 14 } },
+      React.createElement(SectionTitle, null, "Notizen"),
+      React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+        React.createElement("select", {
+          value: noteMonth,
+          onChange: e => { setNoteMonth(e.target.value); setNoteText((player.notes || {})[e.target.value] || ""); },
+          style: fieldStyle
+        },
+          MONTHS.map(m => React.createElement("option", { key: m.key, value: m.key }, m.full))
+        ),
+        React.createElement("textarea", {
+          value: noteText,
+          onChange: e => setNoteText(e.target.value),
+          placeholder: "Notiz für diesen Monat…",
+          rows: 4,
+          style: { ...fieldStyle, resize: "vertical", lineHeight: 1.5 }
+        }),
+        React.createElement("button", {
+          onClick: handleSaveNote, disabled: savingNote,
+          style: { background: C.accent, color: "#060c27", border: "none", borderRadius: 10, padding: "11px", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }
+        }, savingNote ? "Wird gespeichert…" : "Notiz speichern"),
+        (player.notes || {})[noteMonth] && React.createElement("div", { style: { background: "rgba(72,207,253,0.07)", border: `1px solid ${C.cardBorder}`, borderRadius: 10, padding: "10px 12px" } },
+          React.createElement("p", { style: { fontSize: 11, opacity: 0.6, margin: "0 0 4px", textTransform: "uppercase", letterSpacing: 0.5 } }, "Gespeicherte Notiz"),
+          React.createElement("p", { style: { fontSize: 14, margin: 0, whiteSpace: "pre-wrap" } }, (player.notes || {})[noteMonth])
         )
       )
     )

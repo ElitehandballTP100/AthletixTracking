@@ -39,7 +39,7 @@ const SUPABASE_KEY = 'sb_publishable_Q1DDKMUDdhHCNJfL3_kN4w_STJajACP';
 // ============================================================
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-const { useState, useEffect, useMemo } = React;
+const { useState, useEffect, useRef, useMemo } = React;
 const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } = Recharts;
 
 /* ---------- Design Tokens ---------- */
@@ -68,9 +68,9 @@ const METRICS = [
 
 const MONTH_LABELS = ["Jan","Feb","Mär","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"];
 
+/* Build month list Jun 2026 – Jun 2027 */
 function buildMonths() {
   const out = [];
-  // Jun 2026 → Jun 2027 = 13 Monate
   const start = new Date(2026, 5, 1);
   for (let i = 0; i <= 12; i++) {
     const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
@@ -81,6 +81,42 @@ function buildMonths() {
 }
 const MONTHS = buildMonths();
 const CURRENT_MONTH = "2026-06";
+
+/* Build week list — KW1..KW52 for the season, using ISO-style keys "2026-W23" etc. */
+function buildWeeks() {
+  const out = [];
+  // 52 weeks starting from 2026-06-09 (Mon)
+  const start = new Date(2026, 5, 9); // Mon Jun 9 2026
+  for (let i = 0; i < 52; i++) {
+    const d = new Date(start.getTime() + i * 7 * 24 * 3600 * 1000);
+    const year = d.getFullYear();
+    // ISO week number
+    const jan4 = new Date(year, 0, 4);
+    const weekStart = new Date(jan4.getTime() - ((jan4.getDay()||7)-1)*86400000);
+    const wn = Math.floor((d - weekStart) / (7*86400000)) + 1;
+    const key = `${year}-W${String(wn).padStart(2,"0")}`;
+    const dayStr = d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit' });
+    const endD = new Date(d.getTime() + 6*86400000);
+    const endStr = endD.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit' });
+    out.push({ key, label: `KW${wn}`, full: `KW ${wn} (${dayStr}–${endStr})`, year });
+  }
+  return out;
+}
+const WEEKS = buildWeeks();
+
+/* Current week key */
+function getCurrentWeekKey() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const jan4 = new Date(year, 0, 4);
+  const weekStart = new Date(jan4.getTime() - ((jan4.getDay()||7)-1)*86400000);
+  const wn = Math.floor((now - weekStart) / (7*86400000)) + 1;
+  return `${year}-W${String(wn).padStart(2,"0")}`;
+}
+const CURRENT_WEEK = (() => {
+  const k = getCurrentWeekKey();
+  return WEEKS.find(w => w.key === k) ? k : WEEKS[0].key;
+})();
 
 const POSITION_OPTIONS = ["Torwart","Linksaußen","Rückraum Links","Rückraum Mitte","Rückraum Rechts","Rechtsaußen","Kreisläufer"];
 const PLAN_OPTIONS = ["TP100 Trainingsplan","TP100 Trainingsplan (abgeschwächt)","TP100 Jugend Trainingsplan"];
@@ -95,6 +131,13 @@ async function loadPlayers() {
   if (e3) throw e3;
   const { data: notesData, error: e4 } = await sb.from('notes').select('*').limit(10000);
   if (e4) throw e4;
+  // Load photos metadata (just the month key + url stored in player_photos table)
+  let photosData = [];
+  try {
+    const { data: ph } = await sb.from('player_photos').select('*').limit(10000);
+    if (ph) photosData = ph;
+  } catch(_) {}
+
   return players.map(p => {
     const data = {};
     METRICS.forEach(m => {
@@ -104,10 +147,12 @@ async function loadPlayers() {
         .sort((a, b) => a.month.localeCompare(b.month));
     });
     const motMap = {};
-    motivation.filter(r => r.player_id === p.id).forEach(r => { motMap[r.month] = r.value; });
+    motivation.filter(r => r.player_id === p.id).forEach(r => { motMap[r.week || r.month] = r.value; });
     const notesMap = {};
-    (notesData || []).filter(r => r.player_id === p.id).forEach(r => { notesMap[r.month] = r.text; });
-    return { ...p, data, motivation: motMap, notes: notesMap };
+    (notesData || []).filter(r => r.player_id === p.id).forEach(r => { notesMap[r.week || r.month] = r.text; });
+    const photosMap = {};
+    photosData.filter(r => r.player_id === p.id).forEach(r => { photosMap[r.month] = r.photo_url; });
+    return { ...p, data, motivation: motMap, notes: notesMap, photos: photosMap };
   });
 }
 
@@ -126,6 +171,7 @@ async function deletePlayerFromDB(playerId) {
   await sb.from('measurements').delete().eq('player_id', playerId);
   await sb.from('motivation').delete().eq('player_id', playerId);
   await sb.from('notes').delete().eq('player_id', playerId);
+  try { await sb.from('player_photos').delete().eq('player_id', playerId); } catch(_) {}
   const { error } = await sb.from('players').delete().eq('id', playerId);
   if (error) throw error;
 }
@@ -134,8 +180,7 @@ function calcTrainingWeek(startDate) {
   if (!startDate) return null;
   const start = new Date(startDate);
   const now = new Date();
-  start.setHours(0,0,0,0);
-  now.setHours(0,0,0,0);
+  start.setHours(0,0,0,0); now.setHours(0,0,0,0);
   const diffMs = now - start;
   if (diffMs < 0) return null;
   return Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000)) + 1;
@@ -149,20 +194,40 @@ async function saveMeasurement(playerId, metricId, month, value) {
   if (error) throw error;
 }
 
-async function saveMotivation(playerId, month, value) {
+/* Motivation now uses week key */
+async function saveMotivation(playerId, weekKey, value) {
   const { error } = await sb.from('motivation').upsert(
-    { player_id: playerId, month, value },
+    { player_id: playerId, week: weekKey, month: weekKey, value },
     { onConflict: 'player_id,month' }
   );
   if (error) throw error;
 }
 
-async function saveNote(playerId, month, text) {
+/* Notes now use week key */
+async function saveNote(playerId, weekKey, text) {
   const { error } = await sb.from('notes').upsert(
-    { player_id: playerId, month, text },
+    { player_id: playerId, week: weekKey, month: weekKey, text },
     { onConflict: 'player_id,month' }
   );
   if (error) throw error;
+}
+
+/* Upload photo to Supabase Storage and save URL */
+async function savePhoto(playerId, monthKey, file) {
+  // Upload to storage bucket "player-photos"
+  const ext = file.name.split('.').pop() || 'jpg';
+  const path = `${playerId}/${monthKey}.${ext}`;
+  const { error: upErr } = await sb.storage.from('player-photos').upload(path, file, { upsert: true });
+  if (upErr) throw upErr;
+  const { data: urlData } = sb.storage.from('player-photos').getPublicUrl(path);
+  const url = urlData.publicUrl;
+  // Save reference in player_photos table
+  const { error: dbErr } = await sb.from('player_photos').upsert(
+    { player_id: playerId, month: monthKey, photo_url: url },
+    { onConflict: 'player_id,month' }
+  );
+  if (dbErr) throw dbErr;
+  return url;
 }
 
 async function addPlayerToDB(player) {
@@ -175,7 +240,7 @@ async function addPlayerToDB(player) {
   if (error) throw error;
   const emptyData = {};
   METRICS.forEach(m => { emptyData[m.id] = []; });
-  return { ...data, data: emptyData, motivation: {} };
+  return { ...data, data: emptyData, motivation: {}, notes: {}, photos: {} };
 }
 
 /* ---------- UI Bausteine ---------- */
@@ -211,6 +276,7 @@ const fieldStyle = {
 
 /* ---------- Spielerliste ---------- */
 const EMPTY_FORM = { name: "", position: "", email: "", age: "", plan: "", weight: "", height: "", plan_start_date: "" };
+const IS_PREVIEW = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('preview');
 
 function PlayerList({ players, onSelect, onAdd }) {
   const [q, setQ] = useState("");
@@ -225,10 +291,8 @@ function PlayerList({ players, onSelect, onAdd }) {
   async function handleAdd() {
     if (!form.name.trim()) { setErr("Name ist Pflichtfeld."); return; }
     setSaving(true); setErr("");
-    try {
-      const newPlayer = await addPlayerToDB(form);
-      onAdd(newPlayer); setForm(EMPTY_FORM); setShowForm(false);
-    } catch(e) { setErr("Fehler: " + e.message); }
+    try { const np = await addPlayerToDB(form); onAdd(np); setForm(EMPTY_FORM); setShowForm(false); }
+    catch(e) { setErr("Fehler: " + e.message); }
     setSaving(false);
   }
 
@@ -259,15 +323,12 @@ function PlayerList({ players, onSelect, onAdd }) {
     showForm && React.createElement(Card, { style: { marginBottom: 16 } },
       React.createElement(SectionTitle, null, "Neuen Spieler anlegen"),
       React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
-        field("name", "Name *"),
-        field("position", "Position", "text", POSITION_OPTIONS),
+        field("name", "Name *"), field("position", "Position", "text", POSITION_OPTIONS),
         field("plan", "Trainingsplan", "text", PLAN_OPTIONS),
         field("plan_start_date", "Trainingsplan Startdatum", "date"),
-        field("email", "E-Mail", "email"),
-        field("age", "Alter", "number"),
+        field("email", "E-Mail", "email"), field("age", "Alter", "number"),
         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 } },
-          field("weight", "Gewicht (kg)", "number"),
-          field("height", "Größe (cm)", "number")
+          field("weight", "Gewicht (kg)", "number"), field("height", "Größe (cm)", "number")
         )
       ),
       err && React.createElement("p", { style: { color: "#ef4444", fontSize: 13, margin: "8px 0 0" } }, err),
@@ -280,7 +341,7 @@ function PlayerList({ players, onSelect, onAdd }) {
     React.createElement("input", { placeholder: "Suche nach Name oder Position…", value: q, onChange: e => setQ(e.target.value), style: { ...fieldStyle, marginBottom: 16 } }),
 
     players.length === 0
-      ? React.createElement("div", { style: { textAlign: "center", opacity: 0.5, padding: "40px 0", fontSize: 14 } }, "Noch keine Spieler. Klick auf '+ Spieler' um den ersten anzulegen.")
+      ? React.createElement("div", { style: { textAlign: "center", opacity: 0.5, padding: "40px 0", fontSize: 14 } }, "Noch keine Spieler.")
       : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
           filtered.map(p => React.createElement("button", {
             key: p.id, onClick: () => onSelect(p.id),
@@ -293,7 +354,7 @@ function PlayerList({ players, onSelect, onAdd }) {
               React.createElement("div", { style: { fontWeight: 600, fontSize: 16 } }, p.name),
               React.createElement("div", { style: { opacity: 0.65, fontSize: 13 } }, p.position || "—")
             ),
-            React.createElement(MotDot, { value: p.motivation[CURRENT_MONTH] }),
+            React.createElement(MotDot, { value: p.motivation[CURRENT_WEEK] }),
             React.createElement("span", { style: { color: C.accent, fontSize: 20, lineHeight: 1 } }, "›")
           ))
         )
@@ -305,9 +366,8 @@ function DevSummary({ player }) {
   const summary = useMemo(() => {
     return METRICS.map(m => {
       const series = (player.data[m.id] || []).filter(s => s.value != null);
-      if (series.length < 2) return { ...m, first: null, last: null, diff: null, pct: null };
-      const first = series[0].value;
-      const last = series[series.length - 1].value;
+      if (series.length < 2) return { ...m, first: null };
+      const first = series[0].value, last = series[series.length-1].value;
       const diff = last - first;
       const pct = first !== 0 ? (diff / Math.abs(first)) * 100 : 0;
       const positive = m.higherBetter === null ? null : (m.higherBetter ? diff > 0 : diff < 0);
@@ -316,12 +376,10 @@ function DevSummary({ player }) {
   }, [player]);
 
   if (summary.length === 0) return React.createElement("p", { style: { opacity: 0.5, fontSize: 13, textAlign: "center", margin: "8px 0" } }, "Noch keine Messdaten vorhanden.");
-
   return React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
     summary.map(m => {
       const isWeight = m.id === "weight";
       const arrow = m.diff > 0 ? "↑" : m.diff < 0 ? "↓" : "→";
-      // Gewicht: immer neutral (kein grün/rot)
       const color = isWeight ? C.accent : (m.positive === true ? "#22c55e" : m.positive === false ? "#ef4444" : C.accent);
       const barW = Math.min(Math.abs(m.pct), 100);
       const displayPct = m.higherBetter === false ? -m.pct : m.pct;
@@ -330,7 +388,7 @@ function DevSummary({ player }) {
           React.createElement("span", { style: { fontSize: 13, fontWeight: 600 } }, m.name),
           React.createElement("span", { style: { fontSize: 13, color, fontWeight: 700 } },
             isWeight
-              ? `${arrow} ${m.diff > 0 ? "+" : ""}${Math.round(m.diff * 10) / 10} ${m.unit}  ·  ${m.first} → ${m.last} ${m.unit}`
+              ? `${arrow} ${m.diff > 0 ? "+" : ""}${Math.round(m.diff*10)/10} ${m.unit}  ·  ${m.first} → ${m.last} ${m.unit}`
               : `${arrow} ${m.diff > 0 ? "+" : ""}${m.id === "sprint" ? m.diff.toFixed(2) : Math.round(m.diff)} ${m.unit} (${displayPct > 0 ? "+" : ""}${displayPct.toFixed(1)}%)`
           )
         ),
@@ -346,7 +404,302 @@ function DevSummary({ player }) {
   );
 }
 
-/* ---------- Detailansicht ---------- */
+/* ===================== FOTO-SEKTION ===================== */
+function PhotoSection({ player, onUpdate }) {
+  const [photoMonth, setPhotoMonth] = useState(CURRENT_MONTH);
+  const [uploading, setUploading] = useState(false);
+  const [cameraMode, setCameraMode] = useState(false);
+  const [stream, setStream] = useState(null);
+  const [capturedImg, setCapturedImg] = useState(null);
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  const currentPhotoUrl = (player.photos || {})[photoMonth] || null;
+
+  async function startCamera() {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+      setStream(s);
+      setCameraMode(true);
+      setCapturedImg(null);
+      // attach stream after render
+      setTimeout(() => { if (videoRef.current) videoRef.current.srcObject = s; }, 100);
+    } catch(e) { alert("Kamera konnte nicht gestartet werden: " + e.message); }
+  }
+
+  function stopCamera() {
+    if (stream) { stream.getTracks().forEach(t => t.stop()); setStream(null); }
+    setCameraMode(false);
+  }
+
+  function capturePhoto() {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    setCapturedImg(dataUrl);
+    stopCamera();
+  }
+
+  async function uploadCaptured() {
+    if (!capturedImg) return;
+    setUploading(true);
+    try {
+      const res = await fetch(capturedImg);
+      const blob = await res.blob();
+      const file = new File([blob], `photo_${photoMonth}.jpg`, { type: "image/jpeg" });
+      const url = await savePhoto(player.id, photoMonth, file);
+      onUpdate({ ...player, photos: { ...(player.photos || {}), [photoMonth]: url } });
+      setCapturedImg(null);
+    } catch(e) { alert("Upload fehlgeschlagen: " + e.message); }
+    setUploading(false);
+  }
+
+  async function handleFileUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const url = await savePhoto(player.id, photoMonth, file);
+      onUpdate({ ...player, photos: { ...(player.photos || {}), [photoMonth]: url } });
+    } catch(e) { alert("Upload fehlgeschlagen: " + e.message); }
+    setUploading(false);
+    e.target.value = "";
+  }
+
+  return React.createElement(Card, { style: { marginBottom: 14 } },
+    React.createElement(SectionTitle, null, "📸 Fotos"),
+
+    /* Monat-Auswahl */
+    React.createElement("div", { style: { marginBottom: 14 } },
+      React.createElement("label", { style: { fontSize: 12, opacity: 0.6, display: "block", marginBottom: 6 } }, "MONAT"),
+      React.createElement("select", { value: photoMonth, onChange: e => { setPhotoMonth(e.target.value); stopCamera(); setCapturedImg(null); }, style: fieldStyle },
+        MONTHS.map(m => React.createElement("option", { key: m.key, value: m.key }, m.full))
+      )
+    ),
+
+    /* Bestehendes Foto anzeigen */
+    currentPhotoUrl && !capturedImg && React.createElement("div", { style: { marginBottom: 14, borderRadius: 12, overflow: "hidden", border: `1px solid ${C.cardBorder}` } },
+      React.createElement("img", { src: currentPhotoUrl, style: { width: "100%", display: "block", maxHeight: 280, objectFit: "cover" }, alt: "Spielerfoto" })
+    ),
+
+    /* Captured preview */
+    capturedImg && React.createElement("div", { style: { marginBottom: 14 } },
+      React.createElement("img", { src: capturedImg, style: { width: "100%", borderRadius: 12, border: `1px solid ${C.accent}` }, alt: "Vorschau" }),
+      React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 10 } },
+        React.createElement("button", {
+          onClick: uploadCaptured, disabled: uploading,
+          style: { flex: 1, background: C.accent, color: "#060c27", border: "none", borderRadius: 10, padding: "11px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit", fontSize: 14 }
+        }, uploading ? "Wird gespeichert…" : "✓ Foto speichern"),
+        React.createElement("button", {
+          onClick: () => setCapturedImg(null),
+          style: { background: "transparent", color: C.text, border: `1px solid ${C.cardBorder}`, borderRadius: 10, padding: "11px 14px", cursor: "pointer", fontFamily: "inherit", fontSize: 14 }
+        }, "✕")
+      )
+    ),
+
+    /* Kamera-Viewfinder */
+    cameraMode && React.createElement("div", { style: { marginBottom: 14, position: "relative" } },
+      React.createElement("video", { ref: videoRef, autoPlay: true, playsInline: true, style: { width: "100%", borderRadius: 12, border: `1px solid ${C.accent}`, display: "block" } }),
+      React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 10 } },
+        React.createElement("button", {
+          onClick: capturePhoto,
+          style: { flex: 1, background: C.accent, color: "#060c27", border: "none", borderRadius: 10, padding: "11px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit", fontSize: 14 }
+        }, "📸 Aufnehmen"),
+        React.createElement("button", {
+          onClick: stopCamera,
+          style: { background: "transparent", color: C.text, border: `1px solid ${C.cardBorder}`, borderRadius: 10, padding: "11px 14px", cursor: "pointer", fontFamily: "inherit", fontSize: 14 }
+        }, "✕ Abbrechen")
+      )
+    ),
+
+    /* Canvas (unsichtbar, für capture) */
+    React.createElement("canvas", { ref: canvasRef, style: { display: "none" } }),
+
+    /* Buttons: Kamera / Datei hochladen */
+    !cameraMode && !capturedImg && React.createElement("div", { style: { display: "flex", gap: 8 } },
+      React.createElement("button", {
+        onClick: startCamera,
+        style: { flex: 1, background: "rgba(72,207,253,0.12)", color: C.accent, border: `1px solid ${C.cardBorder}`, borderRadius: 10, padding: "11px", cursor: "pointer", fontFamily: "inherit", fontSize: 14, fontWeight: 600 }
+      }, "📷 Kamera öffnen"),
+      React.createElement("button", {
+        onClick: () => fileInputRef.current && fileInputRef.current.click(), disabled: uploading,
+        style: { flex: 1, background: "rgba(72,207,253,0.12)", color: C.accent, border: `1px solid ${C.cardBorder}`, borderRadius: 10, padding: "11px", cursor: "pointer", fontFamily: "inherit", fontSize: 14, fontWeight: 600 }
+      }, uploading ? "Lädt hoch…" : "🖼 Foto wählen")
+    ),
+
+    React.createElement("input", { ref: fileInputRef, type: "file", accept: "image/*", capture: "environment", style: { display: "none" }, onChange: handleFileUpload })
+  );
+}
+
+/* ===================== SPRACH-NOTIZEN ===================== */
+function NotesSection({ player, onUpdate }) {
+  const [noteWeek, setNoteWeek] = useState(CURRENT_WEEK);
+  const [noteText, setNoteText] = useState((player.notes || {})[CURRENT_WEEK] || "");
+  const [savingNote, setSavingNote] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState("");
+  const recognitionRef = useRef(null);
+
+  // sync text when week changes
+  function changeWeek(wk) {
+    setNoteWeek(wk);
+    setNoteText((player.notes || {})[wk] || "");
+    setVoiceStatus("");
+  }
+
+  function startVoice() {
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) { alert("Sprachaufnahme wird in diesem Browser nicht unterstützt. Bitte Chrome verwenden."); return; }
+    const rec = new SpeechRec();
+    rec.lang = "de-DE";
+    rec.continuous = true;
+    rec.interimResults = true;
+    const base = noteText;
+    rec.onresult = (e) => {
+      let interim = "";
+      let final = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) final += e.results[i][0].transcript + " ";
+        else interim += e.results[i][0].transcript;
+      }
+      setNoteText((base + final).trimStart() + (interim ? " [" + interim + "]" : ""));
+    };
+    rec.onerror = (e) => { setVoiceStatus("Fehler: " + e.error); setRecording(false); };
+    rec.onend = () => {
+      // Remove interim brackets on end
+      setNoteText(t => t.replace(/\s*\[.*?\]/g, "").trim());
+      setRecording(false);
+      setVoiceStatus("Aufnahme beendet.");
+    };
+    rec.start();
+    recognitionRef.current = rec;
+    setRecording(true);
+    setVoiceStatus("🎙 Aufnahme läuft…");
+  }
+
+  function stopVoice() {
+    if (recognitionRef.current) { recognitionRef.current.stop(); recognitionRef.current = null; }
+    setRecording(false);
+  }
+
+  async function handleSaveNote() {
+    if (IS_PREVIEW) return;
+    setSavingNote(true);
+    try {
+      await saveNote(player.id, noteWeek, noteText);
+      onUpdate({ ...player, notes: { ...(player.notes || {}), [noteWeek]: noteText } });
+    } catch(e) { alert("Fehler: " + e.message); }
+    setSavingNote(false);
+  }
+
+  const weekObj = WEEKS.find(w => w.key === noteWeek);
+
+  return React.createElement(Card, { style: { marginTop: 14 } },
+    React.createElement(SectionTitle, null, "📝 Notizen"),
+
+    /* Wochen-Auswahl */
+    React.createElement("div", { style: { marginBottom: 10 } },
+      React.createElement("label", { style: { fontSize: 12, opacity: 0.6, display: "block", marginBottom: 6 } }, "WOCHE"),
+      React.createElement("select", {
+        value: noteWeek,
+        onChange: e => changeWeek(e.target.value),
+        style: fieldStyle
+      }, WEEKS.map(w => React.createElement("option", { key: w.key, value: w.key }, w.full)))
+    ),
+
+    /* Textarea */
+    React.createElement("textarea", {
+      value: noteText,
+      onChange: e => setNoteText(e.target.value),
+      placeholder: weekObj ? `Notiz für ${weekObj.full}…` : "Notiz…",
+      rows: 4,
+      style: { ...fieldStyle, resize: "vertical", lineHeight: 1.5, marginBottom: 10 }
+    }),
+
+    /* Sprach-Button + Status */
+    React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } },
+      !recording
+        ? React.createElement("button", {
+            onClick: startVoice,
+            style: { flex: 1, background: "rgba(72,207,253,0.12)", color: C.accent, border: `1px solid ${C.cardBorder}`, borderRadius: 10, padding: "10px", cursor: "pointer", fontFamily: "inherit", fontSize: 14, fontWeight: 600 }
+          }, "🎙 Sprachaufnahme starten")
+        : React.createElement("button", {
+            onClick: stopVoice,
+            style: { flex: 1, background: "#ef4444", color: "#fff", border: "none", borderRadius: 10, padding: "10px", cursor: "pointer", fontFamily: "inherit", fontSize: 14, fontWeight: 700 }
+          }, "⏹ Aufnahme stoppen")
+    ),
+    voiceStatus && React.createElement("p", { style: { fontSize: 12, opacity: 0.7, margin: "0 0 10px", color: recording ? C.accent : "rgba(255,255,255,0.6)" } }, voiceStatus),
+
+    /* Speichern */
+    React.createElement("button", {
+      onClick: handleSaveNote, disabled: savingNote,
+      style: { width: "100%", background: C.accent, color: "#060c27", border: "none", borderRadius: 10, padding: "11px", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }
+    }, savingNote ? "Wird gespeichert…" : "Notiz speichern"),
+
+    /* Gespeicherte Notiz anzeigen */
+    (player.notes || {})[noteWeek] && React.createElement("div", { style: { marginTop: 12, background: "rgba(72,207,253,0.07)", border: `1px solid ${C.cardBorder}`, borderRadius: 10, padding: "10px 12px" } },
+      React.createElement("p", { style: { fontSize: 11, opacity: 0.6, margin: "0 0 4px", textTransform: "uppercase", letterSpacing: 0.5 } }, "Gespeichert"),
+      React.createElement("p", { style: { fontSize: 14, margin: 0, whiteSpace: "pre-wrap" } }, (player.notes || {})[noteWeek])
+    )
+  );
+}
+
+/* ===================== MOTIVATIONS-DASHBOARD (wöchentlich) ===================== */
+function MotivationSection({ player, onUpdate }) {
+  const [motWeek, setMotWeek] = useState(CURRENT_WEEK);
+
+  async function setMotivation(value) {
+    if (IS_PREVIEW) return;
+    try {
+      await saveMotivation(player.id, motWeek, value);
+      onUpdate({ ...player, motivation: { ...player.motivation, [motWeek]: value } });
+    } catch(e) { alert("Fehler: " + e.message); }
+  }
+
+  // Show last 8 weeks
+  const last8Weeks = WEEKS.slice(0, 8);
+
+  return React.createElement(Card, null,
+    React.createElement(SectionTitle, null, "Motivations-Dashboard"),
+
+    /* Verlauf letzte 8 Wochen */
+    React.createElement("div", { style: { overflowX: "auto", marginBottom: 16 } },
+      React.createElement("div", { style: { display: "flex", gap: 10, paddingBottom: 4, minWidth: "min-content" } },
+        last8Weeks.map(w => React.createElement("div", { key: w.key, style: { textAlign: "center", minWidth: 40 } },
+          React.createElement(MotDot, { value: player.motivation[w.key], size: 22 }),
+          React.createElement("div", { style: { fontSize: 10, opacity: 0.6, marginTop: 4, whiteSpace: "nowrap" } }, w.label)
+        ))
+      )
+    ),
+
+    /* Eingabe */
+    React.createElement("div", { style: { paddingTop: 14, borderTop: `1px solid ${C.cardBorder}` } },
+      React.createElement("p", { style: { fontSize: 13, fontWeight: 600, margin: "0 0 8px", color: C.accent } }, "Motivation eintragen"),
+      React.createElement("select", { value: motWeek, onChange: e => setMotWeek(e.target.value), style: { ...fieldStyle, marginBottom: 10 } },
+        WEEKS.map(w => React.createElement("option", { key: w.key, value: w.key }, w.full))
+      ),
+      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 } },
+        MOT_ORDER.map(key => {
+          const active = player.motivation[motWeek] === key;
+          return React.createElement("button", {
+            key, onClick: () => setMotivation(key),
+            style: { display: "flex", alignItems: "center", gap: 8, background: active ? MOT[key].color : "rgba(255,255,255,0.05)", border: `1px solid ${active ? MOT[key].color : C.cardBorder}`, borderRadius: 10, padding: "10px 12px", cursor: "pointer", color: C.text, fontFamily: "inherit", fontSize: 13, fontWeight: 600 }
+          },
+            React.createElement("span", { style: { width: 14, height: 14, borderRadius: "50%", background: MOT[key].color, flexShrink: 0 } }),
+            MOT[key].label
+          );
+        })
+      )
+    )
+  );
+}
+
+/* ===================== DETAILANSICHT ===================== */
 function PlayerDetail({ player, onBack, onUpdate, onDelete }) {
   const [selMetric, setSelMetric] = useState(METRICS[0].id);
   const [editInfo, setEditInfo] = useState(false);
@@ -357,10 +710,6 @@ function PlayerDetail({ player, onBack, onUpdate, onDelete }) {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [motMonth, setMotMonth] = useState(CURRENT_MONTH);
-  const [noteMonth, setNoteMonth] = useState(CURRENT_MONTH);
-  const [noteText, setNoteText] = useState(player.notes ? (player.notes[CURRENT_MONTH] || "") : "");
-  const [savingNote, setSavingNote] = useState(false);
 
   const trainingWeek = calcTrainingWeek(player.plan_start_date);
   const metric = METRICS.find(m => m.id === selMetric);
@@ -377,18 +726,15 @@ function PlayerDetail({ player, onBack, onUpdate, onDelete }) {
     setSaving(true);
     try {
       const updated = { ...player, ...form, age: Number(form.age), weight: Number(form.weight)||null, height: Number(form.height)||null, plan_start_date: form.plan_start_date || null };
-      await savePlayer(updated);
-      onUpdate(updated); setEditInfo(false);
+      await savePlayer(updated); onUpdate(updated); setEditInfo(false);
     } catch(e) { alert("Fehler: " + e.message); }
     setSaving(false);
   }
 
   async function handleDelete() {
     setDeleting(true);
-    try {
-      await deletePlayerFromDB(player.id);
-      onDelete(player.id);
-    } catch(e) { alert("Fehler beim Löschen: " + e.message); setDeleting(false); }
+    try { await deletePlayerFromDB(player.id); onDelete(player.id); }
+    catch(e) { alert("Fehler: " + e.message); setDeleting(false); }
   }
 
   async function addMeasurement() {
@@ -405,24 +751,6 @@ function PlayerDetail({ player, onBack, onUpdate, onDelete }) {
       setMeValue(""); setSelMetric(meMetric);
     } catch(e) { alert("Fehler: " + e.message); }
     setSaving(false);
-  }
-
-  async function setMotivation(value) {
-    if (IS_PREVIEW) return;
-    try {
-      await saveMotivation(player.id, motMonth, value);
-      onUpdate({ ...player, motivation: { ...player.motivation, [motMonth]: value } });
-    } catch(e) { alert("Fehler: " + e.message); }
-  }
-
-  async function handleSaveNote() {
-    if (IS_PREVIEW) { setSavingNote(false); return; }
-    setSavingNote(true);
-    try {
-      await saveNote(player.id, noteMonth, noteText);
-      onUpdate({ ...player, notes: { ...(player.notes || {}), [noteMonth]: noteText } });
-    } catch(e) { alert("Fehler: " + e.message); }
-    setSavingNote(false);
   }
 
   function editField(k, label, type = "text", opts = null) {
@@ -451,24 +779,21 @@ function PlayerDetail({ player, onBack, onUpdate, onDelete }) {
       ),
       editInfo
         ? React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
-            editField("name", "Name"),
-            editField("position", "Position", "text", POSITION_OPTIONS),
-            editField("plan", "Trainingsplan", "text", PLAN_OPTIONS),
-            editField("plan_start_date", "Trainingsplan Startdatum", "date"),
-            editField("email", "E-Mail", "email"),
-            editField("age", "Alter", "number"),
+            editField("name","Name"), editField("position","Position","text",POSITION_OPTIONS),
+            editField("plan","Trainingsplan","text",PLAN_OPTIONS),
+            editField("plan_start_date","Trainingsplan Startdatum","date"),
+            editField("email","E-Mail","email"), editField("age","Alter","number"),
             React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 } },
-              editField("weight", "Gewicht (kg)", "number"),
-              editField("height", "Größe (cm)", "number")
+              editField("weight","Gewicht (kg)","number"), editField("height","Größe (cm)","number")
             )
           )
         : React.createElement("div", null,
             React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 14px", marginBottom: trainingWeek ? 12 : 0 } },
-              React.createElement(Info, { label: "Position",      value: player.position }),
-              React.createElement(Info, { label: "Alter",         value: player.age ? `${player.age} Jahre` : null }),
-              React.createElement(Info, { label: "Gewicht",       value: player.weight ? `${player.weight} kg` : null }),
-              React.createElement(Info, { label: "Größe",         value: player.height ? `${player.height} cm` : null }),
-              React.createElement(Info, { label: "E-Mail",        value: player.email, full: true }),
+              React.createElement(Info, { label: "Position", value: player.position }),
+              React.createElement(Info, { label: "Alter", value: player.age ? `${player.age} Jahre` : null }),
+              React.createElement(Info, { label: "Gewicht", value: player.weight ? `${player.weight} kg` : null }),
+              React.createElement(Info, { label: "Größe", value: player.height ? `${player.height} cm` : null }),
+              React.createElement(Info, { label: "E-Mail", value: player.email, full: true }),
               React.createElement(Info, { label: "Trainingsplan", value: player.plan, accent: true, full: true }),
               player.plan_start_date && React.createElement(Info, { label: "Trainingsstart", value: new Date(player.plan_start_date).toLocaleDateString('de-DE'), full: false })
             ),
@@ -478,63 +803,48 @@ function PlayerDetail({ player, onBack, onUpdate, onDelete }) {
             )
           ),
 
-      /* --- Spieler löschen --- */
       !editInfo && React.createElement("div", { style: { marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.cardBorder}` } },
         !confirmDelete
-          ? React.createElement("button", {
-              onClick: () => setConfirmDelete(true),
-              style: { background: "transparent", color: "#ef4444", border: "1px solid #ef4444", borderRadius: 8, padding: "6px 14px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }
-            }, "Spieler löschen")
+          ? React.createElement("button", { onClick: () => setConfirmDelete(true), style: { background: "transparent", color: "#ef4444", border: "1px solid #ef4444", borderRadius: 8, padding: "6px 14px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 } }, "Spieler löschen")
           : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
-              React.createElement("p", { style: { fontSize: 13, color: "#ef4444", margin: 0 } }, `Wirklich „${player.name}" und alle zugehörigen Daten löschen?`),
+              React.createElement("p", { style: { fontSize: 13, color: "#ef4444", margin: 0 } }, `Wirklich „${player.name}" und alle Daten löschen?`),
               React.createElement("div", { style: { display: "flex", gap: 8 } },
-                React.createElement("button", {
-                  onClick: handleDelete, disabled: deleting,
-                  style: { background: "#ef4444", color: "#fff", border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 }
-                }, deleting ? "Wird gelöscht…" : "Ja, löschen"),
-                React.createElement("button", {
-                  onClick: () => setConfirmDelete(false),
-                  style: { background: "transparent", color: C.text, border: `1px solid ${C.cardBorder}`, borderRadius: 8, padding: "7px 16px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }
-                }, "Abbrechen")
+                React.createElement("button", { onClick: handleDelete, disabled: deleting, style: { background: "#ef4444", color: "#fff", border: "none", borderRadius: 8, padding: "7px 16px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 700 } }, deleting ? "Wird gelöscht…" : "Ja, löschen"),
+                React.createElement("button", { onClick: () => setConfirmDelete(false), style: { background: "transparent", color: C.text, border: `1px solid ${C.cardBorder}`, borderRadius: 8, padding: "7px 16px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" } }, "Abbrechen")
               )
             )
       )
     ),
 
+    /* --- Foto-Sektion --- */
+    React.createElement(PhotoSection, { player, onUpdate }),
+
     /* --- Entwicklungsübersicht --- */
     React.createElement(Card, { style: { marginBottom: 14 } },
       React.createElement(SectionTitle, null, "Entwicklungsübersicht"),
-
-      /* Zusammenfassung */
       React.createElement("div", { style: { marginBottom: 16, paddingBottom: 16, borderBottom: `1px solid ${C.cardBorder}` } },
         React.createElement("p", { style: { fontSize: 12, opacity: 0.6, margin: "0 0 10px" } }, "Gesamtentwicklung · erster bis letzter Eintrag"),
         React.createElement(DevSummary, { player })
       ),
-
-      /* Metrik-Auswahl */
       React.createElement("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 } },
         METRICS.map(m => React.createElement("button", {
           key: m.id, onClick: () => setSelMetric(m.id),
           style: { background: selMetric === m.id ? C.accent : "transparent", color: selMetric === m.id ? "#060c27" : C.text, border: `1px solid ${selMetric === m.id ? C.accent : C.cardBorder}`, borderRadius: 20, padding: "6px 12px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }
         }, m.name))
       ),
-
-      /* Chart oder Gewichtsverlauf */
       React.createElement("div", { style: { minHeight: 120, marginLeft: -10 } },
         selMetric === "weight"
           ? (chartData.length === 0
               ? React.createElement("div", { style: { height: 120, display: "flex", alignItems: "center", justifyContent: "center", opacity: 0.4, fontSize: 13 } }, "Noch keine Gewichtsdaten")
               : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6, paddingLeft: 10 } },
                   chartData.map((d, i) => {
-                    const prev = chartData[i - 1];
+                    const prev = chartData[i-1];
                     const diff = prev ? d.value - prev.value : null;
                     const arrow = diff === null ? null : diff > 0 ? "↑" : diff < 0 ? "↓" : "→";
                     return React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 10, background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "8px 12px" } },
                       React.createElement("span", { style: { fontSize: 12, opacity: 0.6, width: 28, flexShrink: 0 } }, d.label),
                       React.createElement("span", { style: { fontSize: 15, fontWeight: 700, color: C.accent } }, `${d.value} kg`),
-                      diff !== null && React.createElement("span", { style: { fontSize: 12, color: "rgba(255,255,255,0.5)", marginLeft: "auto" } },
-                        `${arrow} ${diff > 0 ? "+" : ""}${(Math.round(diff * 10) / 10)} kg`
-                      )
+                      diff !== null && React.createElement("span", { style: { fontSize: 12, color: "rgba(255,255,255,0.5)", marginLeft: "auto" } }, `${arrow} ${diff > 0 ? "+" : ""}${Math.round(diff*10)/10} kg`)
                     );
                   })
                 )
@@ -555,8 +865,6 @@ function PlayerDetail({ player, onBack, onUpdate, onDelete }) {
       React.createElement("p", { style: { textAlign: "center", fontSize: 12, opacity: 0.6, margin: "6px 0 0" } },
         `${metric.name} in ${metric.unit}${metric.higherBetter === true ? " · höher = besser" : metric.higherBetter === false ? " · niedriger = besser" : ""}`
       ),
-
-      /* Neuer Wert */
       React.createElement("div", { style: { marginTop: 16, paddingTop: 16, borderTop: `1px solid ${C.cardBorder}` } },
         React.createElement("p", { style: { fontSize: 13, fontWeight: 600, margin: "0 0 8px", color: C.accent } }, "Neuen Wert eintragen"),
         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 } },
@@ -572,68 +880,11 @@ function PlayerDetail({ player, onBack, onUpdate, onDelete }) {
       )
     ),
 
-    /* --- Motivations-Dashboard --- */
-    React.createElement(Card, null,
-      React.createElement(SectionTitle, null, "Motivations-Dashboard"),
+    /* --- Motivations-Dashboard (wöchentlich) --- */
+    React.createElement(MotivationSection, { player, onUpdate }),
 
-      /* Alle Monate Jun 26 – Jun 27 */
-      React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6, marginBottom: 16 } },
-        MONTHS.map(m => React.createElement("div", { key: m.key, style: { textAlign: "center" } },
-          React.createElement(MotDot, { value: player.motivation[m.key], size: 22 }),
-          React.createElement("div", { style: { fontSize: 10, opacity: 0.6, marginTop: 4 } }, m.label),
-          React.createElement("div", { style: { fontSize: 9, opacity: 0.4 } }, m.key.slice(0,4) === "2027" ? "27" : "26")
-        ))
-      ),
-
-      /* Monat auswählen & eintragen */
-      React.createElement("div", { style: { paddingTop: 14, borderTop: `1px solid ${C.cardBorder}` } },
-        React.createElement("p", { style: { fontSize: 13, fontWeight: 600, margin: "0 0 8px", color: C.accent } }, "Motivation eintragen"),
-        React.createElement("select", { value: motMonth, onChange: e => setMotMonth(e.target.value), style: { ...fieldStyle, marginBottom: 10 } },
-          MONTHS.map(m => React.createElement("option", { key: m.key, value: m.key }, m.full))
-        ),
-        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 } },
-          MOT_ORDER.map(key => {
-            const active = player.motivation[motMonth] === key;
-            return React.createElement("button", {
-              key, onClick: () => setMotivation(key),
-              style: { display: "flex", alignItems: "center", gap: 8, background: active ? MOT[key].color : "rgba(255,255,255,0.05)", border: `1px solid ${active ? MOT[key].color : C.cardBorder}`, borderRadius: 10, padding: "10px 12px", cursor: "pointer", color: C.text, fontFamily: "inherit", fontSize: 13, fontWeight: 600 }
-            },
-              React.createElement("span", { style: { width: 14, height: 14, borderRadius: "50%", background: MOT[key].color, flexShrink: 0 } }),
-              MOT[key].label
-            );
-          })
-        )
-      )
-    ),
-
-    /* --- Notizen --- */
-    React.createElement(Card, { style: { marginTop: 14 } },
-      React.createElement(SectionTitle, null, "Notizen"),
-      React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
-        React.createElement("select", {
-          value: noteMonth,
-          onChange: e => { setNoteMonth(e.target.value); setNoteText((player.notes || {})[e.target.value] || ""); },
-          style: fieldStyle
-        },
-          MONTHS.map(m => React.createElement("option", { key: m.key, value: m.key }, m.full))
-        ),
-        React.createElement("textarea", {
-          value: noteText,
-          onChange: e => setNoteText(e.target.value),
-          placeholder: "Notiz für diesen Monat…",
-          rows: 4,
-          style: { ...fieldStyle, resize: "vertical", lineHeight: 1.5 }
-        }),
-        React.createElement("button", {
-          onClick: handleSaveNote, disabled: savingNote,
-          style: { background: C.accent, color: "#060c27", border: "none", borderRadius: 10, padding: "11px", fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }
-        }, savingNote ? "Wird gespeichert…" : "Notiz speichern"),
-        (player.notes || {})[noteMonth] && React.createElement("div", { style: { background: "rgba(72,207,253,0.07)", border: `1px solid ${C.cardBorder}`, borderRadius: 10, padding: "10px 12px" } },
-          React.createElement("p", { style: { fontSize: 11, opacity: 0.6, margin: "0 0 4px", textTransform: "uppercase", letterSpacing: 0.5 } }, "Gespeicherte Notiz"),
-          React.createElement("p", { style: { fontSize: 14, margin: 0, whiteSpace: "pre-wrap" } }, (player.notes || {})[noteMonth])
-        )
-      )
-    )
+    /* --- Notizen (wöchentlich + Sprache) --- */
+    React.createElement(NotesSection, { player, onUpdate })
   );
 }
 
@@ -670,47 +921,33 @@ function App() {
   );
 }
 
-/* ---------- Preview-Modus ---------- */
-const IS_PREVIEW = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('preview');
-
 /* ---------- Login ---------- */
 function Login() {
   const [email, setEmail] = React.useState("");
   const [pw, setPw] = React.useState("");
   const [err, setErr] = React.useState("");
   const [busy, setBusy] = React.useState(false);
-  const inp = { width:"100%", boxSizing:"border-box", marginBottom:"12px", padding:"12px 14px",
-    background:C.inputBg, color:C.text, border:"1px solid "+C.cardBorder,
-    borderRadius:"8px", fontSize:"15px", outline:"none" };
-  const btn = { width:"100%", padding:"13px", background:C.accent, color:"#060c27",
-    fontWeight:800, fontSize:"15px", border:"none", borderRadius:"8px", cursor:"pointer" };
+  const inp = { width:"100%", boxSizing:"border-box", marginBottom:"12px", padding:"12px 14px", background:C.inputBg, color:C.text, border:"1px solid "+C.cardBorder, borderRadius:"8px", fontSize:"15px", outline:"none" };
+  const btn = { width:"100%", padding:"13px", background:C.accent, color:"#060c27", fontWeight:800, fontSize:"15px", border:"none", borderRadius:"8px", cursor:"pointer" };
   async function submit() {
     setErr(""); setBusy(true);
     const { error } = await sb.auth.signInWithPassword({ email: email.trim(), password: pw });
     setBusy(false);
     if (error) setErr(error.message || "Login fehlgeschlagen");
   }
-  return React.createElement("div", { style:{ minHeight:"100vh", display:"flex", alignItems:"center",
-      justifyContent:"center", background:C.bg, padding:"20px" } },
-    React.createElement("div", { style:{ width:"100%", maxWidth:"380px", background:C.cardBg,
-        border:"1px solid "+C.cardBorder, borderRadius:"16px", padding:"30px" } },
-      React.createElement("h1", { style:{ color:C.text, fontSize:"22px", margin:"0 0 6px", fontWeight:800 } },
-        "EHM Athletik-Tracker"),
-      React.createElement("p", { style:{ color:"rgba(255,255,255,0.7)", fontSize:"14px", margin:"0 0 20px" } },
-        "Bitte mit deinem Vereins-Zugang einloggen."),
-      React.createElement("input", { type:"email", placeholder:"E-Mail", value:email,
-        autoComplete:"username", onChange:e=>setEmail(e.target.value), style:inp }),
-      React.createElement("input", { type:"password", placeholder:"Passwort", value:pw,
-        autoComplete:"current-password", onChange:e=>setPw(e.target.value),
-        onKeyDown:e=>{ if(e.key==="Enter") submit(); }, style:inp }),
+  return React.createElement("div", { style:{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:C.bg, padding:"20px" } },
+    React.createElement("div", { style:{ width:"100%", maxWidth:"380px", background:C.cardBg, border:"1px solid "+C.cardBorder, borderRadius:"16px", padding:"30px" } },
+      React.createElement("h1", { style:{ color:C.text, fontSize:"22px", margin:"0 0 6px", fontWeight:800 } }, "EHM Athletik-Tracker"),
+      React.createElement("p", { style:{ color:"rgba(255,255,255,0.7)", fontSize:"14px", margin:"0 0 20px" } }, "Bitte mit deinem Vereins-Zugang einloggen."),
+      React.createElement("input", { type:"email", placeholder:"E-Mail", value:email, autoComplete:"username", onChange:e=>setEmail(e.target.value), style:inp }),
+      React.createElement("input", { type:"password", placeholder:"Passwort", value:pw, autoComplete:"current-password", onChange:e=>setPw(e.target.value), onKeyDown:e=>{ if(e.key==="Enter") submit(); }, style:inp }),
       err ? React.createElement("div", { style:{ color:"#ff9c9c", fontSize:"13px", margin:"2px 0 10px" } }, err) : null,
-      React.createElement("button", { onClick:submit, disabled:busy, style:btn },
-        busy ? "\u2026" : "Einloggen")
+      React.createElement("button", { onClick:submit, disabled:busy, style:btn }, busy ? "…" : "Einloggen")
     )
   );
 }
 
-/* ---------- Root (Auth-Gate + Preview) ---------- */
+/* ---------- Root ---------- */
 function Root() {
   const [session, setSession] = React.useState(IS_PREVIEW ? "preview" : undefined);
   React.useEffect(() => {
@@ -720,24 +957,13 @@ function Root() {
     return () => { sub.subscription.unsubscribe(); };
   }, []);
   if (IS_PREVIEW) return React.createElement(React.Fragment, null,
-    React.createElement("div", { style:{ background:"rgba(72,207,253,0.13)",
-        borderBottom:"1px solid rgba(72,207,253,0.35)", padding:"9px 18px",
-        textAlign:"center", fontSize:"13px", color:"rgba(255,255,255,0.88)",
-        fontFamily:"system-ui,sans-serif", letterSpacing:".2px" } },
-      "Demo-Vorschau \u00b7 Beispieldaten des Mustervereins \u00b7 Kein Login erforderlich"),
+    React.createElement("div", { style:{ background:"rgba(72,207,253,0.13)", borderBottom:"1px solid rgba(72,207,253,0.35)", padding:"9px 18px", textAlign:"center", fontSize:"13px", color:"rgba(255,255,255,0.88)", fontFamily:"system-ui,sans-serif", letterSpacing:".2px" } }, "Demo-Vorschau · Beispieldaten · Kein Login erforderlich"),
     React.createElement(App, null)
   );
-  if (session === undefined)
-    return React.createElement("div", { style:{ minHeight:"100vh", display:"flex",
-        alignItems:"center", justifyContent:"center", background:C.bg, color:C.text } },
-      "L\u00e4dt\u2026");
+  if (session === undefined) return React.createElement("div", { style:{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:C.bg, color:C.text } }, "Lädt…");
   if (!session) return React.createElement(Login, null);
   return React.createElement(React.Fragment, null,
-    React.createElement("button", { onClick:()=>sb.auth.signOut(),
-      style:{ position:"fixed", top:"10px", right:"10px", zIndex:9999,
-        background:"rgba(255,255,255,0.12)", color:C.text,
-        border:"1px solid "+C.cardBorder, borderRadius:"8px",
-        padding:"6px 12px", fontSize:"12px", cursor:"pointer" } }, "Abmelden"),
+    React.createElement("button", { onClick:()=>sb.auth.signOut(), style:{ position:"fixed", top:"10px", right:"10px", zIndex:9999, background:"rgba(255,255,255,0.12)", color:C.text, border:"1px solid "+C.cardBorder, borderRadius:"8px", padding:"6px 12px", fontSize:"12px", cursor:"pointer" } }, "Abmelden"),
     React.createElement(App, null)
   );
 }

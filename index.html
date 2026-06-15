@@ -858,10 +858,14 @@ function QuickNoteModal({player,onClose,onSaved}){
 }
 
 /* ===== SCHNELL-MOTIVATION POPUP (Long-Press) ===== */
-function QuickMotivationModal({player,onClose,onSaved,onPhotoSaved}){
+function QuickMotivationModal({player,onClose,onSaved,onPhotoSaved,onBodySaved}){
   const [saving,setSaving]=useState(null);
   const [uploading,setUploading]=useState(false);
   const [photoTaken,setPhotoTaken]=useState(false);
+  const [weight,setWeight]=useState(player.weight?String(player.weight):"");
+  const [height,setHeight]=useState(player.height?String(player.height):"");
+  const [bodySaved,setBodySaved]=useState(false);
+  const [savingBody,setSavingBody]=useState(false);
   const fileInputRef=useRef(null);
   const week=CURRENT_WEEK;
   const weekObj=WEEKS.find(w=>w.key===week);
@@ -888,9 +892,28 @@ function QuickMotivationModal({player,onClose,onSaved,onPhotoSaved}){
     e.target.value="";
   }
 
+  async function saveBody(){
+    if(!weight&&!height)return;
+    setSavingBody(true);
+    try{
+      const updated={...player,weight:weight?Number(weight):player.weight,height:height?Number(height):player.height};
+      await savePlayer(updated);
+      // Also save weight as measurement for tracking
+      if(weight){
+        await saveMeasurement(player.id,'weight',CURRENT_MONTH,Number(weight));
+      }
+      onBodySaved(updated);
+      setBodySaved(true);
+    }catch(e){alert("Fehler: "+e.message);}
+    setSavingBody(false);
+  }
+
   const current=player.motivation[week];
+  const inputS={...fieldStyle,padding:"10px 12px",fontSize:16,fontWeight:700,textAlign:"center"};
+
   return React.createElement("div",{style:{position:"fixed",inset:0,background:"rgba(6,12,39,0.92)",zIndex:9990,display:"flex",alignItems:"flex-end",padding:16},onClick:onClose},
-    React.createElement("div",{style:{width:"100%",maxWidth:480,margin:"0 auto",background:"#0a1535",border:`1px solid ${C.cardBorder}`,borderRadius:"20px 20px 16px 16px",padding:20},onClick:e=>e.stopPropagation()},
+    React.createElement("div",{style:{width:"100%",maxWidth:480,margin:"0 auto",background:"#0a1535",border:`1px solid ${C.cardBorder}`,borderRadius:"20px 20px 16px 16px",padding:20,maxHeight:"90vh",overflowY:"auto"},onClick:e=>e.stopPropagation()},
+
       // Header
       React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}},
         React.createElement("div",null,
@@ -899,6 +922,7 @@ function QuickMotivationModal({player,onClose,onSaved,onPhotoSaved}){
         ),
         React.createElement("button",{onClick:onClose,style:{background:"none",border:"none",color:"rgba(255,255,255,0.5)",fontSize:22,cursor:"pointer",lineHeight:1}},"✕")
       ),
+
       // Motivation
       React.createElement("p",{style:{fontSize:12,opacity:0.6,margin:"0 0 10px",textTransform:"uppercase",letterSpacing:0.5}},"Motivation diese Woche"),
       React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}},
@@ -911,9 +935,32 @@ function QuickMotivationModal({player,onClose,onSaved,onPhotoSaved}){
           );
         })
       ),
+
       // Divider
       React.createElement("div",{style:{borderTop:`1px solid ${C.cardBorder}`,marginBottom:14}}),
-      // Photo button
+
+      // Gewicht & Größe
+      React.createElement("p",{style:{fontSize:12,opacity:0.6,margin:"0 0 10px",textTransform:"uppercase",letterSpacing:0.5}},"Körperdaten"),
+      React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}},
+        React.createElement("div",null,
+          React.createElement("label",{style:{fontSize:11,opacity:0.5,display:"block",marginBottom:4,textAlign:"center"}},"Gewicht (kg)"),
+          React.createElement("input",{type:"number",inputMode:"decimal",placeholder:player.weight?String(player.weight):"—",value:weight,onChange:e=>setWeight(e.target.value),style:inputS})
+        ),
+        React.createElement("div",null,
+          React.createElement("label",{style:{fontSize:11,opacity:0.5,display:"block",marginBottom:4,textAlign:"center"}},"Größe (cm)"),
+          React.createElement("input",{type:"number",inputMode:"decimal",placeholder:player.height?String(player.height):"—",value:height,onChange:e=>setHeight(e.target.value),style:inputS})
+        )
+      ),
+      React.createElement(Btn,{
+        onClick:saveBody,
+        disabled:savingBody||(!weight&&!height)||bodySaved,
+        style:{width:"100%",background:bodySaved?"rgba(34,197,94,0.15)":(weight||height)?"rgba(72,207,253,0.15)":"rgba(255,255,255,0.05)",color:bodySaved?"#22c55e":(weight||height)?C.accent:"rgba(255,255,255,0.3)",border:`1px solid ${bodySaved?"#22c55e":(weight||height)?C.accent:"rgba(255,255,255,0.1)"}`,borderRadius:12,padding:"11px",fontSize:14,fontWeight:700,marginBottom:16}
+      }, savingBody?"Speichert…":bodySaved?"✓ Körperdaten gespeichert":"Körperdaten speichern"),
+
+      // Divider
+      React.createElement("div",{style:{borderTop:`1px solid ${C.cardBorder}`,marginBottom:14}}),
+
+      // Photo
       React.createElement("p",{style:{fontSize:12,opacity:0.6,margin:"0 0 10px",textTransform:"uppercase",letterSpacing:0.5}},"Foto diesen Monat"),
       React.createElement(Btn,{
         onClick:()=>fileInputRef.current&&fileInputRef.current.click(),
@@ -1179,6 +1226,9 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
       onPhotoSaved:(pid,month,url)=>{
         const p=players.find(x=>x.id===pid);
         onPlayersUpdated([{...p,photos:{...(p.photos||{}),[month]:url}}]);
+      },
+      onBodySaved:(updated)=>{
+        onPlayersUpdated([updated]);
       }
     }),
     prToast&&React.createElement(Toast,{msg:prToast,onDone:()=>setPrToast(null)})

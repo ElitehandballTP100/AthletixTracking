@@ -1981,12 +1981,12 @@ const TOUR_STEPS=[
    steps:[{label:"📋 Anwesenheit öffnen",event:"attendance_opened"},{label:"Max ✓ antippen",event:"attendance_toggled"},{label:"Speichern",event:"attendance_saved"}],
    trigger:"attendance_saved"},
 
-  {id:"long_press_motivation", pos:"bottom",emoji:"🟢",title:"Schritt 4: Live-Motivation",
+  {id:"long_press_motivation", pos:"top",  emoji:"🟢",title:"Schritt 4: Live-Motivation",
    text:"Während du observierst: Lang auf Max drücken → Motivationsfarbe antippen.",
    steps:[{label:"Lang drücken auf Max",event:"longpress_fired"},{label:"Motivationsfarbe antippen",event:"motivation_set"}],
    trigger:"motivation_set"},
 
-  {id:"long_press_note",      pos:"bottom",emoji:"🎙",title:"Schritt 5: Sprachnotiz",
+  {id:"long_press_note",      pos:"top",   emoji:"🎙",title:"Schritt 5: Sprachnotiz",
    text:"Fällt dir etwas auf? Lang auf Max drücken → sprechen → speichern.",
    steps:[{label:"Lang drücken auf Max",event:"longpress_fired"},{label:"🎙 Sprechen starten",event:"voice_started"},{label:"⏹ Stop → Speichern",event:"note_saved"}],
    trigger:"note_saved"},
@@ -2188,6 +2188,18 @@ function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSele
       setTourMinimized(false); // auto-expand when step advances
     }
   }
+
+  // Auto-minimize when long press fires so the popup is not covered
+  useEffect(()=>{
+    function onEvt(e){
+      const type=(e.detail||{}).type;
+      if(type==="longpress_fired") setTourMinimized(true);
+      // Re-expand after popup closes (motivation_set or note_saved)
+      if(type==="motivation_set"||type==="note_saved") setTourMinimized(false);
+    }
+    window.addEventListener("tour_event",onEvt);
+    return()=>window.removeEventListener("tour_event",onEvt);
+  },[]);
   advanceRef.current=advance;
   window.fireTourEvent=function(type){window.dispatchEvent(new CustomEvent("tour_event",{detail:{type}}));};
 

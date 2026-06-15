@@ -423,6 +423,7 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
       setSaved(true);
       if(window.fireTourEvent)window.fireTourEvent("combine_done");
       window._afterCombine=true;
+      if(window._tourActive)window._afterCombineTour=true;
     }catch(e){alert("Fehler: "+e.message);}
     setSaving(false);
   }
@@ -1729,6 +1730,7 @@ function PlayerDetail({player,onBack,onUpdate,onDelete}){
   const [deleting,setDeleting]=useState(false);
   const [confirmDelete,setConfirmDelete]=useState(false);
   const [prToast,setPrToast]=useState(null);
+  const [showTourNext,setShowTourNext]=useState(false);
   const trainingWeek=calcTrainingWeek(player.plan_start_date);
 
   // Always scroll to top when opening a player profile
@@ -1742,6 +1744,10 @@ function PlayerDetail({player,onBack,onUpdate,onDelete}){
         const el=document.getElementById("dev-section");
         if(el)el.scrollIntoView({behavior:"smooth",block:"start"});
       },400);
+    }
+    if(window._afterCombineTour){
+      window._afterCombineTour=false;
+      setTimeout(()=>setShowTourNext(true),600);
     }
     if(window._afterAttendance){
       window._afterAttendance=false;
@@ -1823,6 +1829,21 @@ function PlayerDetail({player,onBack,onUpdate,onDelete}){
       React.createElement(Card,{style:{marginBottom:14}},
         React.createElement(SectionTitle,{sub:"Antippen zum Aufklappen"},"Entwicklungsübersicht"),
         React.createElement(DevSummary,{player,onUpdate})
+      )
+    ),
+
+    // Tour: show "Weiter" button after combine so trainer knows how to proceed
+    showTourNext&&React.createElement("div",{style:{position:"sticky",bottom:16,zIndex:100,padding:"0 0 4px"}},
+      React.createElement("button",{
+        onClick:()=>{
+          setShowTourNext(false);
+          onBack();
+        },
+        style:{width:"100%",background:"linear-gradient(135deg,#22c55e,#16a34a)",color:"#fff",border:"none",borderRadius:14,padding:"14px",fontWeight:800,fontSize:15,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 4px 20px rgba(34,197,94,0.4)",display:"flex",alignItems:"center",justifyContent:"center",gap:10}
+      },
+        React.createElement("span",{style:{fontSize:18}},"✓"),
+        "Entwicklung gesehen — Weiter zur Anwesenheit",
+        React.createElement("span",{style:{fontSize:18}},"→")
       )
     ),
 

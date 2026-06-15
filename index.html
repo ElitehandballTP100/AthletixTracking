@@ -1894,9 +1894,12 @@ function AppWithTour(){
 
   const visiblePlayers=isTourActive?players.filter(p=>p.email==="demo@tour.test"):players;
 
-  const tourStep=isTourActive?(window._tourStepPos||"bottom"):null;
-  const pt=tourStep==="top"?"200px":"20px";
-  const pb=tourStep==="bottom"?"200px":"60px";
+  // Padding: push content away from tour banner
+  // inDetail: banner always bottom → need bottom padding
+  // not inDetail: depends on step pos
+  const currentTourPos=isTourActive?(selected?"bottom":(window._tourStepPos||"bottom")):null;
+  const pt=currentTourPos==="top"?"200px":"20px";
+  const pb=currentTourPos==="bottom"?"200px":"60px";
   const appContent=React.createElement("div",{style:{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:"'Saira',sans-serif",padding:`${pt} 16px ${pb}`,transition:"padding 0.3s"}},
     React.createElement("div",{style:{maxWidth:480,margin:"0 auto"}},
       selected
@@ -1911,7 +1914,8 @@ function AppWithTour(){
     onAddPlayer:addPlayer,
     onRemovePlayer:removePlayer,
     onSelectPlayer:setSelectedId,
-    selectedId
+    selectedId,
+    inDetail:!!selected
   },appContent);
 }
 
@@ -1931,13 +1935,18 @@ const TOUR_STEPS=[
   {id:"done",              pos:"bottom", emoji:"🎉", title:"Du kennst den echten Ablauf!",                   text:"Einmalig Combine → Jede Einheit: Anwesenheit + Motivation + Notizen → Monatlich: Folgemessung → Graph zeigt Entwicklung. Max wird jetzt gelöscht.",                                                  hint:null,                                                                                                  trigger:null}
 ];
 
-function TourOverlay({step,onNext,onSkip}){
+function TourOverlay({step,onNext,onSkip,inDetail}){
   const stepNum=TOUR_STEPS.findIndex(s=>s.id===step.id);
   const isFirst=stepNum===0;
   const isLast=step.id==="done";
   const isWaiting=!isFirst&&!isLast&&step.trigger!==null;
   const progress=Math.round((stepNum/(TOUR_STEPS.length-1))*100);
-  const pos=step.pos||"bottom"; // "top" or "bottom"
+  // Dynamic positioning:
+  // In detail view → always bottom (buttons/inputs are at top of profile)
+  // In list view   → use step.pos (top = banner above list, bottom = banner below list)
+  // Special: steps that need buttons at bottom of list → top
+  // steps that need interaction at top of profile → bottom
+  const pos=inDetail?"bottom":(step.pos||"bottom");
   const isTop=pos==="top";
 
   // Wrapper: fixed top or bottom, no pointer-events on wrapper itself
@@ -1983,7 +1992,7 @@ function TourOverlay({step,onNext,onSkip}){
   return React.createElement("div",{style:wrapStyle},cardInner);
 }
 
-function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSelectPlayer,selectedId,children}){
+function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSelectPlayer,selectedId,inDetail,children}){
   const TOUR_KEY="athletik_tour_v2";
   const [tourActive,setTourActive]=useState(false);
   const [stepId,setStepId]=useState("welcome");
@@ -2075,7 +2084,7 @@ function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSele
     children,
     !tourActive&&showStartBtn&&React.createElement("button",{onClick:startTour,style:{position:"fixed",bottom:20,right:16,zIndex:9998,background:C.accent,color:"#060c27",border:"none",borderRadius:50,padding:"12px 20px",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 4px 20px rgba(72,207,253,0.4)",display:"flex",alignItems:"center",gap:8}},React.createElement("span",{style:{fontSize:16}},"🚀"),"App-Tour starten"),
     !tourActive&&!showStartBtn&&React.createElement("button",{onClick:restartTour,style:{position:"fixed",bottom:20,right:16,zIndex:9998,background:"rgba(72,207,253,0.12)",color:C.accent,border:"1px solid "+C.cardBorder,borderRadius:50,padding:"8px 14px",fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}},"ⓘ Tour"),
-    tourActive&&React.createElement(TourOverlay,{step:currentStep,onNext:handleNext,onSkip:skipTour})
+    tourActive&&React.createElement(TourOverlay,{step:currentStep,onNext:handleNext,onSkip:skipTour,inDetail:inDetail})
   );
 }
 

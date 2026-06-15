@@ -1440,9 +1440,9 @@ function DevSummary({player,onUpdate}){
             )
           )
         ),
-        prToast&&React.createElement(Toast,{msg:prToast,onDone:()=>setPrToast(null)})
       );
-    })
+    }),
+    prToast&&React.createElement(Toast,{msg:prToast,onDone:()=>setPrToast(null)})
   );
 }
 

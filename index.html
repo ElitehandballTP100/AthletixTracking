@@ -1793,7 +1793,7 @@ function AppWithTour(){
   const [combines,setCombines]=useState([]);
   const [loading,setLoading]=useState(true);
   const [selectedId,setSelectedId]=useState(null);
-  const selected=players.find(p=>p.id===selectedId);
+  const [isTourActive,setIsTourActive]=useState(false);
 
   useEffect(()=>{
     Promise.all([loadPlayers(),loadCombines()])
@@ -1804,6 +1804,14 @@ function AppWithTour(){
       });
   },[]);
 
+  useEffect(()=>{
+    function onTourState(e){setIsTourActive(e.detail.active);}
+    window.addEventListener("tour_state",onTourState);
+    return()=>window.removeEventListener("tour_state",onTourState);
+  },[]);
+
+  const selected=players.find(p=>p.id===selectedId);
+
   function updatePlayer(updated){setPlayers(prev=>prev.map(p=>p.id===updated.id?updated:p));}
   function updatePlayers(updates){setPlayers(prev=>{let next=[...prev];updates.forEach(u=>{const i=next.findIndex(p=>p.id===u.id);if(i>=0)next[i]=u;});return next;});}
   function addPlayer(p){setPlayers(prev=>[...prev,p].sort((a,b)=>a.name.localeCompare(b.name)));}
@@ -1812,13 +1820,6 @@ function AppWithTour(){
 
   if(loading) return React.createElement("div",{style:{padding:40,textAlign:"center",opacity:0.6,fontFamily:"'Saira',sans-serif"}},"Daten werden geladen…");
 
-  // During tour: only show Max Mustermann
-  const [isTourActive,setIsTourActive]=useState(false);
-  useEffect(()=>{
-    function onTourState(e){setIsTourActive(e.detail.active);}
-    window.addEventListener("tour_state",onTourState);
-    return()=>window.removeEventListener("tour_state",onTourState);
-  },[]);
   const visiblePlayers=isTourActive?players.filter(p=>p.email==="demo@tour.test"):players;
 
   const appContent=React.createElement("div",{style:{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:"'Saira',sans-serif",padding:isTourActive?"210px 16px 60px":"20px 16px 60px",transition:"padding 0.2s"}},

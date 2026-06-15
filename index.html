@@ -21,11 +21,11 @@
 <div id="error-box"></div>
 <div id="root"><p style="padding:20px;opacity:0.5">Lädt…</p></div>
 
-<script crossorigin src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
-<script crossorigin src="https://cdn.jsdelivr.net/npm/prop-types@15/prop-types.min.js"></script>
-<script crossorigin src="https://cdn.jsdelivr.net/npm/recharts@2/umd/Recharts.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/prop-types@15.8.1/prop-types.min.js"></script>
+<script crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.min.js"></script>
+<script crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.7/dist/umd/supabase.min.js"></script>
 <script>
 window.onerror = function(msg,src,line){var b=document.getElementById('error-box');b.style.display='block';b.textContent='JS-Fehler: '+msg+' (Zeile '+line+')';};
 </script>
@@ -371,6 +371,13 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
   async function handleSaveAll(){
     setSaving(true);
     try{
+      // Tour: auto-fill demo values for Max if only partial values entered
+      const isTour=activePlayers.length===1&&activePlayers[0]?.email==="demo@tour.test";
+      const demoDefaults={squat:"100",bench:"80",sprint:"4.5",cmj:"38",plank:"90",weight:"82"};
+      function effectiveVal(pid,mid){
+        const v=getVal(pid,mid);
+        return v!==""?v:(isTour?(demoDefaults[mid]||"50"):"");
+      }
       if(combineLabel.trim()){
         await saveCombineToDB(combineLabel.trim(),combineDate);
       }
@@ -381,7 +388,7 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
         const newPBs={...player.personalBests};
         let newPRFound=null;
         for(const m of METRICS){
-          const raw=getVal(pid,m.id);
+          const raw=effectiveVal(pid,m.id);
           if(raw===""||isNaN(Number(raw)))continue;
           const val=Number(raw);
           await saveMeasurement(pid,m.id,month,val);
@@ -404,6 +411,7 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
       onPlayersUpdated(updates);
       setSaved(true);
       if(window.fireTourEvent)window.fireTourEvent("combine_done");
+      window._afterCombine=true;
     }catch(e){alert("Fehler: "+e.message);}
     setSaving(false);
   }
@@ -411,7 +419,7 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
   if(saved) return React.createElement("div",{style:{textAlign:"center",padding:40}},
     React.createElement("div",{style:{fontSize:48,marginBottom:12}},"✅"),
     React.createElement("h2",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:24,margin:"0 0 8px"}},"Daten gespeichert!"),
-    React.createElement("p",{style:{opacity:0.7,marginBottom:24}},`${selectedPlayers.length} Spieler · ${METRICS.filter(m=>activePlayers.some(p=>getVal(p.id,m.id)!=="")).length} Metriken`),
+    React.createElement("p",{style:{opacity:0.7,marginBottom:24}},`${selectedPlayers.length} Spieler · ${METRICS.filter(m=>activePlayers.some(p=>effectiveVal(p.id,m.id)!=="")).length} Metriken`),
     React.createElement(Btn,{onClick:onClose,style:{background:C.accent,color:"#060c27",borderRadius:12,padding:"13px 30px",fontWeight:700,fontSize:16}},"Fertig")
   );
 
@@ -762,6 +770,8 @@ function AttendanceView({players,onPlayersUpdated,onClose}){
       onPlayersUpdated(updates);
       setDone(true);
       if(window.fireTourEvent)window.fireTourEvent("attendance_saved");
+      // scroll hint for next view
+      window._afterAttendance=true;
     }catch(e){alert("Fehler: "+e.message);}
     setSaving(false);
   }
@@ -926,6 +936,7 @@ function QuickMotivationModal({player,onClose,onSaved,onPhotoSaved,onBodySaved})
     try{
       await saveMotivation(player.id,week,key);
       onSaved(player.id,week,key);
+      if(window.fireTourEvent)window.fireTourEvent("motivation_set");
     }catch(e){alert("Fehler: "+e.message);}
     setSaving(null);
   }
@@ -1387,10 +1398,10 @@ function DevSummary({player,onUpdate}){
       return React.createElement("div",{key:m.id,style:{background:isOpen?"rgba(72,207,253,0.06)":"rgba(255,255,255,0.04)",border:`1px solid ${isOpen?C.accent:C.cardBorder}`,borderRadius:12,overflow:"hidden",transition:"border-color 0.2s"}},
 
         // Clickable header row
-        React.createElement(Btn,{onClick:()=>toggle(m.id),style:{width:"100%",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,background:"transparent",textAlign:"left"}},
+        React.createElement(Btn,{onClick:()=>toggle(m.id),style:{width:"100%",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,background:"transparent",textAlign:"left",color:C.text}},
           React.createElement("div",{style:{flex:1,minWidth:0}},
             React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,marginBottom:m.hasSeries?4:0}},
-              React.createElement("span",{style:{fontWeight:700,fontSize:14}},m.name),
+              React.createElement("span",{style:{fontWeight:700,fontSize:14,color:C.text}},m.name),
               pb&&React.createElement("span",{className:"pr-badge"},"PB "+pb.value+m.unit)
             ),
             m.hasSeries&&React.createElement("div",null,
@@ -1451,11 +1462,16 @@ function PhotoSection({player,onUpdate}){
   const [photoWeek,setPhotoWeek]=useState(CURRENT_WEEK);
   const [uploading,setUploading]=useState(false);
   const [cameraMode,setCameraMode]=useState(false);
-  const [stream,setStream]=useState(null);
   const [capturedImg,setCapturedImg]=useState(null);
   const videoRef=useRef(null);
   const canvasRef=useRef(null);
   const fileInputRef=useRef(null);
+  const streamRef=useRef(null);
+
+  // Always stop camera on unmount
+  useEffect(()=>{
+    return()=>{if(streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;}};
+  },[]);
 
   const weekPhotos=(player.photos||{})[photoWeek]||[];
   const nextIndex=weekPhotos.length;
@@ -1464,11 +1480,11 @@ function PhotoSection({player,onUpdate}){
   async function startCamera(){
     try{
       const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"},audio:false});
-      setStream(s);setCameraMode(true);setCapturedImg(null);
+      streamRef.current=s;setCameraMode(true);setCapturedImg(null);
       setTimeout(()=>{if(videoRef.current)videoRef.current.srcObject=s;},100);
     }catch(e){alert("Kamera nicht verfügbar: "+e.message);}
   }
-  function stopCamera(){if(stream){stream.getTracks().forEach(t=>t.stop());setStream(null);}setCameraMode(false);}
+  function stopCamera(){if(streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;}setCameraMode(false);}
   function capturePhoto(){
     const video=videoRef.current,canvas=canvasRef.current;
     if(!video||!canvas)return;
@@ -1479,6 +1495,8 @@ function PhotoSection({player,onUpdate}){
   }
   async function uploadFile(file){
     setUploading(true);
+    // Ensure camera is fully stopped before upload
+    stopCamera();
     try{
       const result=await savePhoto(player.id,photoWeek,file,nextIndex);
       const newEntry={id:result.id,url:result.url,index:nextIndex};
@@ -1486,6 +1504,8 @@ function PhotoSection({player,onUpdate}){
       onUpdate(updated);
     }catch(e){alert("Upload fehlgeschlagen: "+e.message);}
     setUploading(false);
+    // Reset pointer-events in case Safari got confused
+    document.body.style.pointerEvents='';
   }
   async function uploadCaptured(){
     if(!capturedImg)return;
@@ -1497,8 +1517,8 @@ function PhotoSection({player,onUpdate}){
   }
   async function handleFileUpload(e){
     const file=e.target.files[0];if(!file)return;
-    await uploadFile(file);
     e.target.value="";
+    await uploadFile(file);
   }
   async function handleDelete(photo){
     try{
@@ -1515,7 +1535,7 @@ function PhotoSection({player,onUpdate}){
     // Week selector
     React.createElement("div",{style:{marginBottom:14}},
       React.createElement("label",{style:{fontSize:12,opacity:0.6,display:"block",marginBottom:6}},"WOCHE"),
-      React.createElement("select",{value:photoWeek,onChange:e=>{setPhotoWeek(e.target.value);stopCamera();setCapturedImg(null);},style:fieldStyle},
+      React.createElement("select",{value:photoWeek,onChange:e=>{stopCamera();setPhotoWeek(e.target.value);setCapturedImg(null);},style:fieldStyle},
         WEEKS.map(w=>React.createElement("option",{key:w.key,value:w.key},w.full))
       )
     ),
@@ -1661,6 +1681,24 @@ function PlayerDetail({player,onBack,onUpdate,onDelete}){
 
   // Always scroll to top when opening a player profile
   useEffect(()=>{ window.scrollTo({top:0,behavior:"instant"}); },[player.id]);
+
+  // After combine: scroll to Entwicklungsübersicht; after attendance: scroll to calendar
+  useEffect(()=>{
+    if(window._afterCombine){
+      window._afterCombine=false;
+      setTimeout(()=>{
+        const el=document.getElementById("dev-section");
+        if(el)el.scrollIntoView({behavior:"smooth",block:"start"});
+      },400);
+    }
+    if(window._afterAttendance){
+      window._afterAttendance=false;
+      setTimeout(()=>{
+        const el=document.getElementById("attendance-section");
+        if(el)el.scrollIntoView({behavior:"smooth",block:"start"});
+      },400);
+    }
+  },[player.id]);
   async function saveInfoFn(){
     if(IS_PREVIEW)return;setSaving(true);
     try{const u={...player,...form,age:Number(form.age),weight:Number(form.weight)||null,height:Number(form.height)||null,plan_start_date:form.plan_start_date||null};await savePlayer(u);onUpdate(u);setEditInfo(false);}
@@ -1727,11 +1765,13 @@ function PlayerDetail({player,onBack,onUpdate,onDelete}){
 
     React.createElement(PhotoSection,{player,onUpdate}),
 
-    React.createElement(AttendanceCalendar,{player,onUpdate}),
+    React.createElement("div",{id:"attendance-section"},React.createElement(AttendanceCalendar,{player,onUpdate})),
 
-    React.createElement(Card,{style:{marginBottom:14}},
-      React.createElement(SectionTitle,{sub:"Antippen zum Aufklappen"},"Entwicklungsübersicht"),
-      React.createElement(DevSummary,{player,onUpdate})
+    React.createElement("div",{id:"dev-section"},
+      React.createElement(Card,{style:{marginBottom:14}},
+        React.createElement(SectionTitle,{sub:"Antippen zum Aufklappen"},"Entwicklungsübersicht"),
+        React.createElement(DevSummary,{player,onUpdate})
+      )
     ),
 
     React.createElement(MotivationSection,{player,onUpdate}),
@@ -1822,7 +1862,10 @@ function AppWithTour(){
 
   const visiblePlayers=isTourActive?players.filter(p=>p.email==="demo@tour.test"):players;
 
-  const appContent=React.createElement("div",{style:{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:"'Saira',sans-serif",padding:isTourActive?"210px 16px 60px":"20px 16px 60px",transition:"padding 0.2s"}},
+  const tourStep=isTourActive?(window._tourStepPos||"bottom"):null;
+  const pt=tourStep==="top"?"200px":"20px";
+  const pb=tourStep==="bottom"?"200px":"60px";
+  const appContent=React.createElement("div",{style:{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:"'Saira',sans-serif",padding:`${pt} 16px ${pb}`,transition:"padding 0.3s"}},
     React.createElement("div",{style:{maxWidth:480,margin:"0 auto"}},
       selected
         ?React.createElement(PlayerDetail,{player:selected,onBack:()=>{setSelectedId(null);if(window.fireTourEvent)window.fireTourEvent("went_back");},onUpdate:updatePlayer,onDelete:removePlayer})
@@ -1842,75 +1885,70 @@ function AppWithTour(){
 
 /* ===== ONBOARDING TOUR ===== */
 const TOUR_STEPS=[
-  {id:"welcome",emoji:"🚀",title:"Willkommen im Athletik-Tracker!",text:"Diese Tour führt dich durch den echten Ablauf — genau so wie du ihn mit deiner Mannschaft durchführst. Du übst alles an einem Demo-Spieler (Max Mustermann), der am Ende automatisch gelöscht wird.",hint:null,trigger:null},
-  {id:"player_created",emoji:"👤",title:"Schritt 1: Spieler anlegen",text:"Max Mustermann wurde angelegt — genau wie du deine echten Spieler einträgst: Name, Position, Trainingsplan, Startdatum. Tippe jetzt auf Max in der Liste um sein Profil zu öffnen.",hint:"Tippe auf 'Max Mustermann' in der Kaderliste",trigger:null},
-  {id:"combine_first",emoji:"⚡",title:"Schritt 2: Ersterfassung (Combine)",text:"Vor dem allerersten Training erfasst du einmalig alle Startwerte — das ist die Baseline für den Entwicklungsgraph. Geh zurück, tippe ⚡ Combine, wähle 'Combine Ersterfassung', wähle Max, trage mindestens eine Übung ein und speichere.",hint:"‹ Zurück → ⚡ Combine → Ersterfassung → Max wählen → Wert eintragen → Speichern",trigger:"combine_done"},
-  {id:"attendance",emoji:"📋",title:"Schritt 3: Anwesenheit — immer als erstes",text:"Direkt wenn die Gruppe ankommt: Anwesenheit erfassen. Das kostet 30 Sekunden. Tippe 📋 Anwesenheit, wähle heute aus, markiere Max als anwesend und speichere.",hint:"📋 Anwesenheit → heute wählen → Max ✓ → Speichern",trigger:"attendance_saved"},
-  {id:"long_press_motivation",emoji:"🟢",title:"Schritt 4: Live-Motivation per Lang-Druck",text:"Während du die Gruppe observierst: Lang auf einen Spielernamen drücken (~1 Sek.) — Schnell-Popup öffnet sich. Setze für Max eine Motivationsfarbe. Das geht ohne das Profil zu öffnen.",hint:"Lang drücken auf Max Mustermann → Motivationsfarbe antippen",trigger:"motivation_set"},
-  {id:"long_press_note",emoji:"🎙",title:"Schritt 5: Sprachnotiz per Lang-Druck",text:"Fällt dir etwas auf? Lang auf Max drücken → 🎙 Sprechen → kurzen Satz sprechen → stoppen → speichern. Alles live, ohne Tippen, ohne das Profil zu öffnen.",hint:"Lang drücken → 🎙 Sprechen → sprechen → ⏹ Stop → Speichern",trigger:"note_saved"},
-  {id:"followup_combine",emoji:"📊",title:"Schritt 6: Folgemessung (monatl./quartalsw.)",text:"Nach 4–12 Wochen trägst du neue Werte ein — dann zeigt der Graph echten Fortschritt. Starte eine Folgemessung: ⚡ Combine → Folgemessung → Max → einen anderen Wert eintragen als vorhin → Speichern.",hint:"⚡ Combine → Folgemessung → Max → anderen Wert → Speichern",trigger:"combine_done"},
-  {id:"see_graph",emoji:"📈",title:"Schritt 7: Entwicklungsgraph ablesen",text:"Jetzt wird es interessant. Öffne Max' Profil, scrolle zur Entwicklungsübersicht und tippe auf die Übung für die du Werte eingetragen hast — der Graph klappt auf und zeigt den Fortschritt.",hint:"Tippe auf Max → Entwicklungsübersicht → Übung antippen → Graph öffnet sich",trigger:"graph_opened"},
-  {id:"motivation_round",emoji:"🟢",title:"Schritt 8: Motivationsrunde für alle",text:"Nach dem Training: 🟢 Motivationsrunde — alle Spieler auf einem Bildschirm, du tippst pro Spieler eine Farbe. Ideal für die letzten 2 Minuten nach der Einheit.",hint:"‹ Zurück → 🟢 Motivationsrunde → Farbe für Max antippen",trigger:"motivation_round_opened"},
-  {id:"done",emoji:"🎉",title:"Du kennst den echten Ablauf!",text:"Einmalig Combine → Bei jeder Einheit: Anwesenheit + Live-Motivation + Sprachnotizen → Monatlich/Quartalsweise: Folgemessung → Graph zeigt Entwicklung. Max Mustermann wird jetzt gelöscht.",hint:null,trigger:null}
+  // pos:"top"    → banner oben,    Inhalt darunter frei
+  // pos:"bottom" → banner unten,   Inhalt darüber frei
+  {id:"welcome",           pos:"bottom", emoji:"🚀", title:"Willkommen im Athletik-Tracker!",             text:"Diese Tour führt dich durch den echten Ablauf — genau so wie du ihn mit deiner Mannschaft durchführst. Du übst alles an einem Demo-Spieler (Max Mustermann), der am Ende automatisch gelöscht wird.", hint:null,                                                                                              trigger:null},
+  {id:"player_created",    pos:"bottom", emoji:"👤", title:"Schritt 1: Spieler anlegen",                   text:"Max Mustermann wurde angelegt. Tippe jetzt auf ihn in der Liste — sein Profil öffnet sich.",                                                                                                            hint:"Tippe auf 'Max Mustermann' in der Liste ↓",                                                           trigger:null},
+  {id:"combine_first",     pos:"bottom", emoji:"⚡", title:"Schritt 2: Ersterfassung (Combine)",            text:"Geh zurück zur Liste und tippe auf ⚡ Combine. Wähle 'Combine Ersterfassung', dann Max, trage einen Wert ein — der Rest wird automatisch befüllt.",                                                    hint:"‹ Zurück → ⚡ Combine → Ersterfassung → Max → Wert → Speichern ↓",                                     trigger:"combine_done"},
+  {id:"attendance",        pos:"bottom", emoji:"📋", title:"Schritt 3: Anwesenheit erfassen",               text:"Tippe auf 📋 Anwesenheit, wähle heute, markiere Max als anwesend und speichere.",                                                                                                                       hint:"📋 Anwesenheit → Max ✓ → Speichern ↓",                                                                trigger:"attendance_saved"},
+  {id:"long_press_motivation",pos:"top", emoji:"🟢", title:"Schritt 4: Live-Motivation per Lang-Druck",     text:"Halte den Namen 'Max Mustermann' lang gedrückt (~1 Sek.). Im Popup das sich öffnet eine Motivationsfarbe antippen.",                                                                                    hint:"↓ Lang drücken auf Max → Farbe antippen",                                                             trigger:"motivation_set"},
+  {id:"long_press_note",   pos:"top",    emoji:"🎙", title:"Schritt 5: Sprachnotiz per Lang-Druck",         text:"Nochmal lang drücken auf Max. Im Popup 🎙 Sprechen antippen, einen kurzen Satz sprechen, stoppen und speichern.",                                                                                       hint:"↓ Lang drücken → 🎙 Sprechen → ⏹ Stop → Speichern",                                                  trigger:"note_saved"},
+  {id:"followup_combine",  pos:"bottom", emoji:"📊", title:"Schritt 6: Folgemessung",                       text:"Tippe auf ⚡ Combine → Folgemessung → Max → einen anderen Wert eintragen → Speichern. So entsteht der Entwicklungsgraph.",                                                                             hint:"⚡ Combine → Folgemessung → Max → Wert → Speichern ↓",                                                trigger:"combine_done"},
+  {id:"see_graph",         pos:"top",    emoji:"📈", title:"Schritt 7: Entwicklungsgraph ablesen",           text:"Öffne Max' Profil, scrolle zur Entwicklungsübersicht und tippe auf eine Übung — der Graph klappt auf.",                                                                                                hint:"↓ Max öffnen → Entwicklungsübersicht → Übung antippen",                                               trigger:"graph_opened"},
+  {id:"motivation_round",  pos:"bottom", emoji:"🟢", title:"Schritt 8: Motivationsrunde für alle",          text:"Tippe auf 🟢 Motivationsrunde — alle Spieler auf einem Bildschirm, eine Farbe pro Spieler. 30 Sekunden nach dem Training.",                                                                           hint:"🟢 Motivationsrunde → Farbe für Max antippen ↓",                                                      trigger:"motivation_round_opened"},
+  {id:"done",              pos:"bottom", emoji:"🎉", title:"Du kennst den echten Ablauf!",                   text:"Einmalig Combine → Jede Einheit: Anwesenheit + Motivation + Notizen → Monatlich: Folgemessung → Graph zeigt Entwicklung. Max wird jetzt gelöscht.",                                                  hint:null,                                                                                                  trigger:null}
 ];
 
 function TourOverlay({step,onNext,onSkip}){
-  const [collapsed,setCollapsed]=useState(false);
   const stepNum=TOUR_STEPS.findIndex(s=>s.id===step.id);
   const isFirst=stepNum===0;
   const isLast=step.id==="done";
   const isWaiting=!isFirst&&!isLast&&step.trigger!==null;
   const progress=Math.round((stepNum/(TOUR_STEPS.length-1))*100);
+  const pos=step.pos||"bottom"; // "top" or "bottom"
+  const isTop=pos==="top";
 
-  // Auto-expand when step changes
-  useEffect(()=>setCollapsed(false),[step.id]);
+  // Wrapper: fixed top or bottom, no pointer-events on wrapper itself
+  const wrapStyle=isTop
+    ?{position:"fixed",top:0,left:0,right:0,zIndex:10000,padding:"0 12px",pointerEvents:"none"}
+    :{position:"fixed",bottom:0,left:0,right:0,zIndex:10000,padding:"0 12px 12px",pointerEvents:"none"};
 
-  // Collapsed pill — sits top-right, out of the way
-  if(collapsed) return React.createElement("div",{
-    style:{position:"fixed",top:52,right:12,zIndex:10000,background:"linear-gradient(135deg,#0a1535,#0d2040)",border:"2px solid "+C.accent,borderRadius:50,padding:"8px 14px",boxShadow:"0 4px 20px rgba(72,207,253,0.4)",cursor:"pointer",display:"flex",alignItems:"center",gap:8,pointerEvents:"all"},
-    onClick:()=>setCollapsed(false)
-  },
-    React.createElement("span",{style:{fontSize:16}},step.emoji),
-    React.createElement("span",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:13,fontWeight:700,color:C.accent}},"Tour"),
-    React.createElement("span",{style:{fontSize:11,opacity:0.6,color:C.text}},stepNum+"/"+(TOUR_STEPS.length-1)),
-    React.createElement("span",{style:{fontSize:12,color:C.accent}},isWaiting?"⏳":"▼")
-  );
+  // Card rounded corners: top→bottom-rounded, bottom→top-rounded
+  const cardRadius=isTop?"0 0 20px 20px":"20px 20px 0 0";
+  const cardShadow=isTop?"0 4px 30px rgba(72,207,253,0.3)":"0 -4px 30px rgba(72,207,253,0.3)";
 
-  // Full overlay — at TOP so it doesn't cover content below
-  return React.createElement("div",{style:{position:"fixed",top:0,left:0,right:0,zIndex:10000,padding:"10px 12px 0",pointerEvents:"none"}},
-    React.createElement("div",{style:{maxWidth:480,margin:"0 auto",background:"linear-gradient(135deg,#0a1535,#0d2040)",border:"2px solid "+C.accent,borderRadius:"0 0 20px 20px",padding:16,boxShadow:"0 4px 30px rgba(72,207,253,0.3)",pointerEvents:"all"}},
+  const cardInner=React.createElement("div",{style:{maxWidth:480,margin:"0 auto",background:"linear-gradient(135deg,#0a1535,#0d2040)",border:"2px solid "+C.accent,borderRadius:cardRadius,padding:16,boxShadow:cardShadow,pointerEvents:"all"}},
 
-      // Top row: progress + step + collapse + skip
-      React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:10}},
-        React.createElement("div",{style:{flex:1,height:3,background:"rgba(255,255,255,0.1)",borderRadius:2}},
-          React.createElement("div",{style:{width:progress+"%",height:"100%",background:C.accent,borderRadius:2,transition:"width 0.4s"}})
-        ),
-        React.createElement("span",{style:{fontSize:11,opacity:0.5,flexShrink:0}},stepNum+"/"+(TOUR_STEPS.length-1)),
-        // Collapse button — most important for usability
-        isWaiting&&React.createElement("button",{
-          onClick:()=>setCollapsed(true),
-          style:{background:C.accent,border:"none",borderRadius:20,color:"#060c27",fontSize:11,fontWeight:800,cursor:"pointer",padding:"4px 10px",fontFamily:"inherit",flexShrink:0}
-        },"Minimieren ↑"),
-        React.createElement("button",{onClick:onSkip,style:{background:"none",border:"none",color:"rgba(255,255,255,0.3)",fontSize:11,cursor:"pointer",padding:"2px 4px",fontFamily:"inherit"}},"✕")
+    // Progress row
+    React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:10}},
+      React.createElement("div",{style:{flex:1,height:3,background:"rgba(255,255,255,0.1)",borderRadius:2}},
+        React.createElement("div",{style:{width:progress+"%",height:"100%",background:C.accent,borderRadius:2,transition:"width 0.5s"}})
       ),
+      React.createElement("span",{style:{fontSize:11,opacity:0.5,flexShrink:0}},stepNum+"/"+(TOUR_STEPS.length-1)),
+      React.createElement("button",{onClick:onSkip,style:{background:"none",border:"none",color:"rgba(255,255,255,0.3)",fontSize:13,cursor:"pointer",padding:"2px 6px",fontFamily:"inherit",lineHeight:1}},"✕")
+    ),
 
-      // Content
-      React.createElement("div",{style:{display:"flex",gap:10,alignItems:"flex-start",marginBottom:step.hint?8:10}},
-        React.createElement("span",{style:{fontSize:22,lineHeight:1,flexShrink:0}},step.emoji),
-        React.createElement("div",null,
-          React.createElement("div",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:17,fontWeight:700,color:C.accent,marginBottom:4}},step.title),
-          React.createElement("p",{style:{fontSize:12,opacity:0.85,margin:0,lineHeight:1.5}},step.text)
+    // Emoji + text
+    React.createElement("div",{style:{display:"flex",gap:10,alignItems:"flex-start",marginBottom:step.hint?8:10}},
+      React.createElement("span",{style:{fontSize:22,lineHeight:1,flexShrink:0}},step.emoji),
+      React.createElement("div",null,
+        React.createElement("div",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:17,fontWeight:700,color:C.accent,marginBottom:4}},step.title),
+        React.createElement("p",{style:{fontSize:12,opacity:0.85,margin:0,lineHeight:1.5}},step.text)
+      )
+    ),
+
+    // Hint
+    step.hint&&React.createElement("div",{style:{background:"rgba(72,207,253,0.1)",border:"1px solid rgba(72,207,253,0.2)",borderRadius:8,padding:"7px 10px",marginBottom:10,fontSize:11,color:C.accent,lineHeight:1.4}},step.hint),
+
+    // Button or waiting indicator
+    (isFirst||isLast||!isWaiting)
+      ?React.createElement(Btn,{onClick:onNext,style:{width:"100%",background:isLast?"#22c55e":C.accent,color:"#060c27",borderRadius:10,padding:"11px",fontWeight:800,fontSize:14}},
+          isFirst?"Tour starten →":isLast?"✓ Fertig — Demo-Spieler löschen":"Weiter →"
         )
-      ),
-
-      step.hint&&React.createElement("div",{style:{background:"rgba(72,207,253,0.1)",border:"1px solid rgba(72,207,253,0.2)",borderRadius:8,padding:"7px 10px",marginBottom:10,fontSize:11,color:C.accent,lineHeight:1.4}},"👆 "+step.hint),
-
-      (isFirst||isLast||!isWaiting)&&React.createElement(Btn,{onClick:onNext,style:{width:"100%",background:isLast?"#22c55e":C.accent,color:"#060c27",borderRadius:10,padding:"11px",fontWeight:800,fontSize:14}},
-        isFirst?"Tour starten →":isLast?"✓ Fertig — Demo-Spieler löschen":"Weiter →"
-      ),
-      isWaiting&&React.createElement("div",{style:{textAlign:"center",fontSize:11,opacity:0.4,padding:"4px 0"}},"⏳ Führe die Aufgabe oben durch — Tour springt automatisch weiter")
-    )
+      :React.createElement("div",{style:{textAlign:"center",fontSize:11,opacity:0.4,padding:"4px 0"}},"⏳ Führe die Aufgabe durch — Tour springt automatisch weiter")
   );
+
+  return React.createElement("div",{style:wrapStyle},cardInner);
 }
 
 function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSelectPlayer,selectedId,children}){
@@ -1935,7 +1973,14 @@ function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSele
     return()=>window.removeEventListener("tour_event",onEvt);
   },[]);
 
-  function advance(){const idx=TOUR_STEPS.findIndex(s=>s.id===stepIdRef.current);if(idx<TOUR_STEPS.length-1)setStepId(TOUR_STEPS[idx+1].id);}
+  function advance(){
+    const idx=TOUR_STEPS.findIndex(s=>s.id===stepIdRef.current);
+    if(idx<TOUR_STEPS.length-1){
+      const next=TOUR_STEPS[idx+1];
+      window._tourStepPos=next.pos||"bottom";
+      setStepId(next.id);
+    }
+  }
   advanceRef.current=advance;
   window.fireTourEvent=function(type){window.dispatchEvent(new CustomEvent("tour_event",{detail:{type}}));};
 
@@ -1944,6 +1989,7 @@ function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSele
   async function startTour(){
     const ex=players.find(p=>p.email==="demo@tour.test");
     if(ex){await deletePlayerFromDB(ex.id).catch(()=>{});onRemovePlayer(ex.id);}
+    window._tourStepPos="bottom";
     window.dispatchEvent(new CustomEvent('tour_state',{detail:{active:true}}));
     setTourActive(true);setStepId("welcome");
     try{

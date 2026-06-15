@@ -149,6 +149,10 @@ async function loadPlayers(){
 async function loadCombines(){
   try{const {data}=await sb.from('combines').select('*').order('combine_date',{ascending:false});return data||[];}catch(_){return [];}
 }
+async function deleteCombine(id){
+  const {error}=await sb.from('combines').delete().eq('id',id);
+  if(error)throw error;
+}
 async function getUid(){
   const {data}=await sb.auth.getSession();
   return data.session?.user?.id||null;
@@ -468,7 +472,7 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
             )
           )
         ),
-        React.createElement(Btn,{onClick:()=>setStep(1),style:{background:C.accent,color:"#060c27",borderRadius:12,padding:"13px",fontWeight:700,fontSize:15,marginTop:4}},"Weiter → Spieler wählen")
+        React.createElement(Btn,{onClick:()=>{if(window.fireTourEvent)window.fireTourEvent('combine_type_selected');setStep(1);},style:{background:C.accent,color:"#060c27",borderRadius:12,padding:"13px",fontWeight:700,fontSize:15,marginTop:4}},"Weiter → Spieler wählen")
       )
     )
   );
@@ -495,7 +499,7 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
         })
       )
     ),
-    selectedPlayers.length>0&&React.createElement(Btn,{onClick:proceedToEntry,style:{width:"100%",background:C.accent,color:"#060c27",borderRadius:12,padding:"14px",fontWeight:700,fontSize:16}},`Erfassung starten (${selectedPlayers.length} Spieler) →`)
+    selectedPlayers.length>0&&React.createElement(Btn,{onClick:()=>{if(window.fireTourEvent)window.fireTourEvent('combine_player_selected');proceedToEntry();},style:{width:"100%",background:C.accent,color:"#060c27",borderRadius:12,padding:"14px",fontWeight:700,fontSize:16}},`Erfassung starten (${selectedPlayers.length} Spieler) →`)
   );
 
   /* Step 2: Rapid Entry */
@@ -763,7 +767,7 @@ function AttendanceView({players,onPlayersUpdated,onClose}){
     setStatus(s);
   },[day,players]);
 
-  function toggle(pid){setStatus(prev=>({...prev,[pid]:!prev[pid]}));}
+  function toggle(pid){setStatus(prev=>({...prev,[pid]:!prev[pid]}));if(window.fireTourEvent)window.fireTourEvent('attendance_toggled');}
 
   async function saveAll(){
     setSaving(true);
@@ -1158,7 +1162,7 @@ function MotivationRound({players,onPlayersUpdated,onClose}){
 /* ===== SPIELERLISTE ===== */
 const EMPTY_FORM={name:"",position:"",email:"",age:"",plan:"",weight:"",height:"",plan_start_date:""};
 
-function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineCreated}){
+function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineCreated,onRemoveCombine}){
   const [q,setQ]=useState("");
   const [view,setView]=useState("list");// "list"|"combine"|"attendance"
   const [showForm,setShowForm]=useState(false);
@@ -1203,6 +1207,7 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
     const t=setTimeout(()=>{
       if(pressStartRef.current&&!pressStartRef.current.fired){
         pressStartRef.current.fired=true;
+        if(window.fireTourEvent)window.fireTourEvent('longpress_fired');
         setQuickMotPlayer(p);
       }
     },600);
@@ -1230,8 +1235,8 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
     pressStartRef.current=null;
   }
 
-  if(view==="combine") return React.createElement(CombineView,{players,combines,onClose:()=>setView("list"),onPlayersUpdated,onCombineCreated});
-  if(view==="attendance") return React.createElement(AttendanceView,{players,onPlayersUpdated,onClose:()=>setView("list")});
+  if(view==="combine"){if(window.fireTourEvent)window.fireTourEvent('combine_opened');return React.createElement(CombineView,{players,combines,onClose:()=>setView("list"),onPlayersUpdated,onCombineCreated});}
+  if(view==="attendance"){if(window.fireTourEvent)window.fireTourEvent('attendance_opened');return React.createElement(AttendanceView,{players,onPlayersUpdated,onClose:()=>setView("list")});}
   if(view==="motivation"){if(window.fireTourEvent)window.fireTourEvent("motivation_round_opened");return React.createElement(MotivationRound,{players,onPlayersUpdated,onClose:()=>setView("list")});}
 
   return React.createElement("div",null,
@@ -1269,10 +1274,19 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
     combines.length>0&&React.createElement("div",{style:{marginBottom:14}},
       React.createElement("p",{style:{fontSize:12,opacity:0.55,margin:"0 0 8px",textTransform:"uppercase",letterSpacing:0.5}},"Letzte Messungen"),
       React.createElement("div",{style:{display:"flex",gap:8,overflowX:"auto",paddingBottom:4}},
-        combines.slice(0,5).map(c=>
-          React.createElement("div",{key:c.id,style:{flexShrink:0,background:"rgba(72,207,253,0.07)",border:`1px solid ${C.cardBorder}`,borderRadius:10,padding:"8px 12px",fontSize:12}},
-            React.createElement("div",{style:{fontWeight:700,color:C.accent}},c.label),
-            React.createElement("div",{style:{opacity:0.6,marginTop:2}},new Date(c.combine_date).toLocaleDateString('de-DE'))
+        combines.slice(0,10).map(c=>
+          React.createElement("div",{key:c.id,style:{flexShrink:0,background:"rgba(72,207,253,0.07)",border:`1px solid ${C.cardBorder}`,borderRadius:10,padding:"8px 12px",fontSize:12,position:"relative",minWidth:120}},
+            React.createElement("div",{style:{fontWeight:700,color:C.accent,paddingRight:18}},c.label),
+            React.createElement("div",{style:{opacity:0.6,marginTop:2}},new Date(c.combine_date).toLocaleDateString('de-DE')),
+            React.createElement("button",{
+              onClick:async(e)=>{
+                e.stopPropagation();
+                if(!window.confirm(`"${c.label}" löschen?`))return;
+                try{await deleteCombine(c.id);onRemoveCombine(c.id);}
+                catch(err){alert("Fehler: "+err.message);}
+              },
+              style:{position:"absolute",top:4,right:4,background:"none",border:"none",color:"rgba(255,255,255,0.3)",fontSize:13,cursor:"pointer",padding:"2px 4px",lineHeight:1}
+            },"✕")
           )
         )
       )
@@ -1910,7 +1924,7 @@ function AppWithTour(){
     React.createElement("div",{style:{maxWidth:480,margin:"0 auto"}},
       selected
         ?React.createElement(PlayerDetail,{player:selected,onBack:()=>{setSelectedId(null);if(window.fireTourEvent)window.fireTourEvent("went_back");},onUpdate:updatePlayer,onDelete:removePlayer})
-        :React.createElement(PlayerList,{players:visiblePlayers,combines,onSelect:setSelectedId,onAdd:addPlayer,onPlayersUpdated:updatePlayers,onCombineCreated:addCombine})
+        :React.createElement(PlayerList,{players:visiblePlayers,combines,onSelect:(id)=>{setSelectedId(id);if(window.fireTourEvent)window.fireTourEvent('player_opened');},onAdd:addPlayer,onPlayersUpdated:updatePlayers,onCombineCreated:addCombine,onRemoveCombine:(id)=>setCombines(prev=>prev.filter(c=>c.id!==id))})
     )
   );
 
@@ -1927,41 +1941,101 @@ function AppWithTour(){
 
 /* ===== ONBOARDING TOUR ===== */
 const TOUR_STEPS=[
-  {id:"welcome",           pos:"bottom", emoji:"🚀", title:"Willkommen!",                          text:"Diese Tour führt dich durch den echten Ablauf mit einem Demo-Spieler (Max Mustermann). Er wird am Ende gelöscht.",                                         steps:null,                                                                          trigger:null},
-  {id:"player_created",    pos:"bottom", emoji:"👤", title:"Schritt 1: Spieler anlegen",            text:"Max Mustermann wurde angelegt. Tippe jetzt auf ihn in der Liste.",                                                                                          steps:["Tippe auf Max Mustermann"],                                                  trigger:null},
-  {id:"combine_first",     pos:"top",    emoji:"⚡", title:"Schritt 2: Ersterfassung",              text:"Erfasse einmalig alle Startwerte — die Baseline für den Entwicklungsgraph.",                                                                                 steps:["‹ Zurück","⚡ Combine","Ersterfassung wählen","Max auswählen","Kniebeugen-Wert eintragen","Speichern"], trigger:"combine_done"},
-  {id:"attendance",        pos:"top",    emoji:"📋", title:"Schritt 3: Anwesenheit",                text:"Als erstes bei jeder Einheit: Anwesenheit abhaken.",                                                                                                         steps:["📋 Anwesenheit","Datum wählen","Max ✓ antippen","Speichern"],                trigger:"attendance_saved"},
-  {id:"long_press_motivation",pos:"bottom",emoji:"🟢",title:"Schritt 4: Live-Motivation",          text:"Während du observierst: Lang auf Max drücken → Motivationsfarbe antippen.",                                                                                   steps:["Lang drücken auf Max (~1 Sek.)","Motivationsfarbe antippen"],                trigger:"motivation_set"},
-  {id:"long_press_note",   pos:"bottom", emoji:"🎙", title:"Schritt 5: Sprachnotiz",               text:"Fällt dir etwas auf? Lang auf Max drücken → sprechen → speichern.",                                                                                          steps:["Lang drücken auf Max","🎙 Sprechen antippen","Satz sprechen","⏹ Stop → Speichern"], trigger:"note_saved"},
-  {id:"followup_combine",  pos:"top",    emoji:"📊", title:"Schritt 6: Folgemessung",              text:"Monatlich/quartalsweise neue Werte eintragen — dann entsteht der Graph.",                                                                                     steps:["‹ Zurück","⚡ Combine","Folgemessung wählen","Max auswählen","Anderen Wert eintragen","Speichern"], trigger:"combine_done"},
-  {id:"see_graph",         pos:"bottom", emoji:"📈", title:"Schritt 7: Entwicklungsgraph",         text:"Im Spielerprofil: Übung antippen → Graph klappt auf.",                                                                                                        steps:["Max Profil öffnen","Zur Entwicklungsübersicht scrollen","Übung antippen"],   trigger:"graph_opened"},
-  {id:"motivation_round",  pos:"top",    emoji:"🟢", title:"Schritt 8: Motivationsrunde",          text:"Nach dem Training: alle Spieler auf einmal in 30 Sekunden.",                                                                                                  steps:["🟢 Motivationsrunde antippen","Farbe für Max auswählen"],                    trigger:"motivation_round_opened"},
-  {id:"done",              pos:"bottom", emoji:"🎉", title:"Fertig!",                              text:"Einmalig Combine → Jede Einheit: Anwesenheit + Motivation + Notizen → Monatlich: Folgemessung → Graph zeigt Entwicklung. Max wird jetzt gelöscht.",            steps:null,                                                                          trigger:null}
+  {id:"welcome",              pos:"bottom",emoji:"🚀",title:"Willkommen!",
+   text:"Diese Tour führt dich durch den echten Ablauf mit einem Demo-Spieler (Max Mustermann). Er wird am Ende gelöscht.",
+   steps:null, trigger:null},
+
+  {id:"player_created",       pos:"bottom",emoji:"👤",title:"Schritt 1: Spieler anlegen",
+   text:"Max Mustermann wurde angelegt. Tippe jetzt auf ihn in der Liste.",
+   steps:[{label:"Tippe auf Max Mustermann",event:"player_opened"}],
+   trigger:null},
+
+  {id:"combine_first",        pos:"top",emoji:"⚡",title:"Schritt 2: Ersterfassung",
+   text:"Erfasse einmalig alle Startwerte — die Baseline für den Entwicklungsgraph.",
+   steps:[{label:"‹ Zurück zur Liste",event:"went_back"},{label:"⚡ Combine öffnen",event:"combine_opened"},{label:"Ersterfassung wählen",event:"combine_type_selected"},{label:"Max auswählen",event:"combine_player_selected"},{label:"Kniebeugen-Wert eintragen",event:"combine_value_entered"},{label:"Speichern",event:"combine_done"}],
+   trigger:"combine_done"},
+
+  {id:"attendance",           pos:"top",emoji:"📋",title:"Schritt 3: Anwesenheit",
+   text:"Als erstes bei jeder Einheit: Anwesenheit abhaken.",
+   steps:[{label:"📋 Anwesenheit öffnen",event:"attendance_opened"},{label:"Max ✓ antippen",event:"attendance_toggled"},{label:"Speichern",event:"attendance_saved"}],
+   trigger:"attendance_saved"},
+
+  {id:"long_press_motivation", pos:"bottom",emoji:"🟢",title:"Schritt 4: Live-Motivation",
+   text:"Während du observierst: Lang auf Max drücken → Motivationsfarbe antippen.",
+   steps:[{label:"Lang drücken auf Max",event:"longpress_fired"},{label:"Motivationsfarbe antippen",event:"motivation_set"}],
+   trigger:"motivation_set"},
+
+  {id:"long_press_note",      pos:"bottom",emoji:"🎙",title:"Schritt 5: Sprachnotiz",
+   text:"Fällt dir etwas auf? Lang auf Max drücken → sprechen → speichern.",
+   steps:[{label:"Lang drücken auf Max",event:"longpress_fired"},{label:"🎙 Sprechen starten",event:"voice_started"},{label:"⏹ Stop → Speichern",event:"note_saved"}],
+   trigger:"note_saved"},
+
+  {id:"followup_combine",     pos:"top",emoji:"📊",title:"Schritt 6: Folgemessung",
+   text:"Monatlich/quartalsweise neue Werte — dann entsteht der Graph.",
+   steps:[{label:"⚡ Combine öffnen",event:"combine_opened"},{label:"Folgemessung wählen",event:"combine_type_selected"},{label:"Max auswählen",event:"combine_player_selected"},{label:"Wert eintragen",event:"combine_value_entered"},{label:"Speichern",event:"combine_done"}],
+   trigger:"combine_done"},
+
+  {id:"see_graph",            pos:"bottom",emoji:"📈",title:"Schritt 7: Entwicklungsgraph",
+   text:"Im Spielerprofil: Übung antippen → Graph klappt auf.",
+   steps:[{label:"Max Profil öffnen",event:"player_opened"},{label:"Übung antippen",event:"graph_opened"}],
+   trigger:"graph_opened"},
+
+  {id:"motivation_round",     pos:"top",emoji:"🟢",title:"Schritt 8: Motivationsrunde",
+   text:"Nach dem Training: alle Spieler auf einmal in 30 Sekunden.",
+   steps:[{label:"🟢 Motivationsrunde öffnen",event:"motivation_round_opened"},{label:"Farbe für Max antippen",event:"motivation_set"}],
+   trigger:"motivation_set"},
+
+  {id:"done",                 pos:"bottom",emoji:"🎉",title:"Fertig!",
+   text:"Einmalig Combine → Jede Einheit: Anwesenheit + Motivation + Notizen → Monatlich: Folgemessung → Graph zeigt Entwicklung. Max wird jetzt gelöscht.",
+   steps:null, trigger:null}
 ];
 
 
-function TourOverlay({step,onNext,onSkip,inDetail}){
+function TourOverlay({step,onNext,onMinimize,onAbort,inDetail,minimized,onExpand}){
   const [doneSteps,setDoneSteps]=useState(0);
+  const doneStepsRef=useRef(0);
   const stepNum=TOUR_STEPS.findIndex(s=>s.id===step.id);
   const isFirst=stepNum===0;
   const isLast=step.id==="done";
   const isWaiting=!isFirst&&!isLast&&step.trigger!==null;
   const progress=Math.round((stepNum/(TOUR_STEPS.length-1))*100);
 
-  // Reset sub-steps when step changes
-  useEffect(()=>setDoneSteps(0),[step.id]);
+  useEffect(()=>{setDoneSteps(0);doneStepsRef.current=0;},[step.id]);
 
-  // Advance sub-steps automatically when tour progresses
   useEffect(()=>{
-    if(step.steps&&doneSteps<step.steps.length){
-      // don't auto-advance — user sees them light up as they do each action
+    if(!step.steps)return;
+    function onEvt(e){
+      const type=(e.detail||{}).type;
+      const steps=step.steps;
+      const cur=doneStepsRef.current;
+      if(cur<steps.length&&steps[cur].event===type){
+        doneStepsRef.current=cur+1;
+        setDoneSteps(cur+1);
+      }
     }
-  },[doneSteps,step]);
+    window.addEventListener("tour_event",onEvt);
+    return()=>window.removeEventListener("tour_event",onEvt);
+  },[step.id]);
 
-  // Dynamic position: in detail view always bottom; else use step.pos
   const pos=inDetail?"bottom":(step.pos||"bottom");
   const isTop=pos==="top";
 
+  // ── Minimized pill ────────────────────────────────────────────────────────
+  if(minimized){
+    const pillStyle=isTop
+      ?{position:"fixed",top:8,left:"50%",transform:"translateX(-50%)",zIndex:10000}
+      :{position:"fixed",bottom:8,left:"50%",transform:"translateX(-50%)",zIndex:10000};
+    return React.createElement("div",{style:pillStyle},
+      React.createElement("button",{onClick:onExpand,style:{background:"linear-gradient(135deg,#0a1535,#0d2040)",border:"2px solid "+C.accent,borderRadius:50,padding:"8px 18px",display:"flex",alignItems:"center",gap:10,color:C.text,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 4px 20px rgba(72,207,253,0.4)"}},
+        React.createElement("span",{style:{fontSize:16}},step.emoji),
+        React.createElement("span",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:13,fontWeight:700,color:C.accent}},"Tour: "+step.title),
+        React.createElement("span",{style:{fontSize:11,opacity:0.5}},stepNum+"/"+(TOUR_STEPS.length-1)),
+        React.createElement("span",{style:{fontSize:12,color:C.accent}},"▲")
+      )
+    );
+  }
+
+  // ── Full overlay ──────────────────────────────────────────────────────────
   const wrapStyle=isTop
     ?{position:"fixed",top:0,left:0,right:0,zIndex:10000,padding:"0 12px",pointerEvents:"none"}
     :{position:"fixed",bottom:0,left:0,right:0,zIndex:10000,padding:"0 12px 12px",pointerEvents:"none"};
@@ -1971,16 +2045,24 @@ function TourOverlay({step,onNext,onSkip,inDetail}){
   return React.createElement("div",{style:wrapStyle},
     React.createElement("div",{style:{maxWidth:480,margin:"0 auto",background:"linear-gradient(135deg,#071228,#0c1e3a)",border:"2px solid "+C.accent,borderRadius:cardRadius,padding:14,boxShadow:cardShadow,pointerEvents:"all"}},
 
-      // Progress bar + step count + close
+      // Header: progress + step + minimize + abort
       React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:10}},
         React.createElement("div",{style:{flex:1,height:3,background:"rgba(255,255,255,0.1)",borderRadius:2}},
           React.createElement("div",{style:{width:progress+"%",height:"100%",background:C.accent,borderRadius:2,transition:"width 0.5s"}})
         ),
         React.createElement("span",{style:{fontSize:11,opacity:0.45,flexShrink:0}},stepNum+"/"+(TOUR_STEPS.length-1)),
-        React.createElement("button",{onClick:onSkip,style:{background:"none",border:"none",color:"rgba(255,255,255,0.3)",fontSize:14,cursor:"pointer",padding:"1px 5px",fontFamily:"inherit",lineHeight:1}},"✕")
+        // Minimize — hides overlay but tour continues
+        React.createElement("button",{onClick:onMinimize,style:{background:"rgba(72,207,253,0.15)",border:"1px solid rgba(72,207,253,0.3)",borderRadius:20,color:C.accent,fontSize:11,fontWeight:700,cursor:"pointer",padding:"3px 10px",fontFamily:"inherit",flexShrink:0}},
+          isTop?"▲ Minimieren":"▼ Minimieren"
+        ),
+        // Abort — only shown as small text, needs confirm
+        React.createElement("button",{
+          onClick:()=>{if(window.confirm("Tour wirklich beenden? Der Fortschritt geht verloren."))onAbort();},
+          style:{background:"none",border:"none",color:"rgba(255,255,255,0.2)",fontSize:11,cursor:"pointer",padding:"1px 4px",fontFamily:"inherit",flexShrink:0}
+        },"Tour beenden")
       ),
 
-      // Emoji + title + text (compact)
+      // Emoji + title + text
       React.createElement("div",{style:{display:"flex",gap:10,alignItems:"flex-start",marginBottom:step.steps?10:10}},
         React.createElement("span",{style:{fontSize:20,lineHeight:1,flexShrink:0,marginTop:2}},step.emoji),
         React.createElement("div",null,
@@ -1989,29 +2071,24 @@ function TourOverlay({step,onNext,onSkip,inDetail}){
         )
       ),
 
-      // Step-by-step sub-steps as glowing buttons
+      // Sub-step chips
       step.steps&&React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}},
         step.steps.map((s,i)=>{
+          const label=typeof s==="string"?s:s.label;
           const done=i<doneSteps;
           const active=i===doneSteps;
-          return React.createElement("button",{
-            key:i,
-            onClick:()=>{if(active)setDoneSteps(n=>n+1);},
-            style:{
-              background:done?"rgba(72,207,253,0.18)":active?"rgba(72,207,253,0.1)":"rgba(255,255,255,0.04)",
-              color:done?C.accent:active?C.accent:"rgba(255,255,255,0.35)",
-              border:"1px solid "+(done||active?C.accent:"rgba(255,255,255,0.1)"),
-              borderRadius:20,padding:"5px 11px",fontSize:11,fontWeight:done||active?700:400,
-              cursor:active?"pointer":"default",
-              fontFamily:"inherit",
-              boxShadow:active?"0 0 8px rgba(72,207,253,0.35)":"none",
-              display:"flex",alignItems:"center",gap:5,
-              transition:"all 0.2s"
-            }
-          },
+          return React.createElement("div",{key:i,style:{
+            background:done?"rgba(72,207,253,0.18)":active?"rgba(72,207,253,0.1)":"rgba(255,255,255,0.04)",
+            color:done?C.accent:active?C.accent:"rgba(255,255,255,0.3)",
+            border:"1px solid "+(done||active?C.accent:"rgba(255,255,255,0.1)"),
+            borderRadius:20,padding:"5px 11px",fontSize:11,fontWeight:done||active?700:400,
+            fontFamily:"inherit",
+            boxShadow:active?"0 0 8px rgba(72,207,253,0.35)":"none",
+            display:"flex",alignItems:"center",gap:5,
+            transition:"all 0.25s"
+          }},
             done&&React.createElement("span",{style:{fontSize:10}},"✓"),
-            s,
-            active&&React.createElement("span",{style:{fontSize:10,opacity:0.7}},i===step.steps.length-1?"":"→")
+            label
           );
         })
       ),
@@ -2029,7 +2106,9 @@ function TourOverlay({step,onNext,onSkip,inDetail}){
 
 function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSelectPlayer,selectedId,inDetail,children}){
   const TOUR_KEY="athletik_tour_v2";
+  const TOUR_PROGRESS_KEY="athletik_tour_progress_v2";
   const [tourActive,setTourActive]=useState(false);
+  const [tourMinimized,setTourMinimized]=useState(false);
   const [stepId,setStepId]=useState("welcome");
   const [demoPlayer,setDemoPlayer]=useState(null);
   const [showStartBtn,setShowStartBtn]=useState(false);
@@ -2037,7 +2116,37 @@ function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSele
   const advanceRef=useRef(null);
 
   useEffect(()=>{stepIdRef.current=stepId;},[stepId]);
-  useEffect(()=>{try{if(!localStorage.getItem(TOUR_KEY))setShowStartBtn(true);}catch(_){setShowStartBtn(true);}},[]);
+
+  // On mount: check if tour was in progress
+  useEffect(()=>{
+    try{
+      const done=localStorage.getItem(TOUR_KEY);
+      if(done){setShowStartBtn(false);return;}
+      // Restore in-progress tour
+      const saved=localStorage.getItem(TOUR_PROGRESS_KEY);
+      if(saved){
+        const {sid}=JSON.parse(saved);
+        if(sid&&sid!=="welcome"){
+          setStepId(sid);
+          const step=TOUR_STEPS.find(s=>s.id===sid);
+          if(step)window._tourStepPos=step.pos||"bottom";
+          window._tourActive=true;
+          window.dispatchEvent(new CustomEvent('tour_state',{detail:{active:true}}));
+          setTourActive(true);
+          setTourMinimized(false);
+          return;
+        }
+      }
+      setShowStartBtn(true);
+    }catch(_){setShowStartBtn(true);}
+  },[]);
+
+  // Save progress whenever step changes
+  useEffect(()=>{
+    if(tourActive&&stepId!=="done"){
+      try{localStorage.setItem(TOUR_PROGRESS_KEY,JSON.stringify({sid:stepId}));}catch(_){}
+    }
+  },[stepId,tourActive]);
 
   useEffect(()=>{
     function onEvt(e){
@@ -2055,6 +2164,7 @@ function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSele
       const next=TOUR_STEPS[idx+1];
       window._tourStepPos=next.pos||"bottom";
       setStepId(next.id);
+      setTourMinimized(false); // auto-expand when step advances
     }
   }
   advanceRef.current=advance;
@@ -2063,25 +2173,16 @@ function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSele
   function getDemo(){return players.find(p=>p.email==="demo@tour.test")||demoPlayer;}
 
   async function startTour(){
-    // Delete ALL existing demo players (handles duplicates from repeated tour starts)
     const allDemos=players.filter(p=>p.email==="demo@tour.test");
-    for(const ex of allDemos){
-      await deletePlayerFromDB(ex.id).catch(()=>{});
-      onRemovePlayer(ex.id);
-    }
-    // Also check DB directly for any orphaned demos
+    for(const ex of allDemos){await deletePlayerFromDB(ex.id).catch(()=>{});onRemovePlayer(ex.id);}
     try{
       const {data:orphans}=await sb.from('players').select('id').eq('email','demo@tour.test');
-      if(orphans&&orphans.length>0){
-        for(const o of orphans){
-          await deletePlayerFromDB(o.id).catch(()=>{});
-        }
-      }
+      if(orphans&&orphans.length>0)for(const o of orphans)await deletePlayerFromDB(o.id).catch(()=>{});
     }catch(_){}
     window._tourActive=true;
     window._tourStepPos="bottom";
     window.dispatchEvent(new CustomEvent('tour_state',{detail:{active:true}}));
-    setTourActive(true);setStepId("welcome");
+    setTourActive(true);setStepId("welcome");setTourMinimized(false);
     try{
       const demo=await addPlayerToDB({name:"Max Mustermann",position:"Rückraum Mitte",email:"demo@tour.test",age:24,plan:"TP100 Trainingsplan",plan_start_date:todayKey(),weight:"",height:""});
       setDemoPlayer(demo);onAddPlayer(demo);
@@ -2095,33 +2196,50 @@ function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSele
     if(step.id==="see_graph"){advance();return;}
     if(step.id==="done"){
       const d=getDemo();if(d){await deletePlayerFromDB(d.id).catch(()=>{});onRemovePlayer(d.id);}
-      try{localStorage.setItem(TOUR_KEY,"1");}catch(_){}
+      try{localStorage.setItem(TOUR_KEY,"1");localStorage.removeItem(TOUR_PROGRESS_KEY);}catch(_){}
+      window._tourActive=false;
       window.dispatchEvent(new CustomEvent('tour_state',{detail:{active:false}}));
       setTourActive(false);setShowStartBtn(false);setDemoPlayer(null);return;
     }
     if(!step.trigger){advance();return;}
   }
 
-  async function skipTour(){
-    // Delete all demo players
+  async function abortTour(){
     const allDemos=players.filter(p=>p.email==="demo@tour.test");
     for(const ex of allDemos){await deletePlayerFromDB(ex.id).catch(()=>{});onRemovePlayer(ex.id);}
-    try{localStorage.setItem(TOUR_KEY,"1");}catch(_){}
+    try{localStorage.setItem(TOUR_KEY,"1");localStorage.removeItem(TOUR_PROGRESS_KEY);}catch(_){}
     window._tourActive=false;
     window.dispatchEvent(new CustomEvent('tour_state',{detail:{active:false}}));
     setTourActive(false);setShowStartBtn(false);
   }
 
-  function restartTour(){try{localStorage.removeItem(TOUR_KEY);}catch(_){}setShowStartBtn(false);startTour();}
+  function restartTour(){
+    try{localStorage.removeItem(TOUR_KEY);localStorage.removeItem(TOUR_PROGRESS_KEY);}catch(_){}
+    setShowStartBtn(false);startTour();
+  }
 
   const currentStep=TOUR_STEPS.find(s=>s.id===stepId)||TOUR_STEPS[0];
+  const tourPos=inDetail?"bottom":(currentStep.pos||"bottom");
+  const isTop=tourPos==="top";
+
   return React.createElement(React.Fragment,null,
     children,
-    !tourActive&&showStartBtn&&React.createElement("button",{onClick:startTour,style:{position:"fixed",bottom:20,right:16,zIndex:9998,background:C.accent,color:"#060c27",border:"none",borderRadius:50,padding:"12px 20px",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 4px 20px rgba(72,207,253,0.4)",display:"flex",alignItems:"center",gap:8}},React.createElement("span",{style:{fontSize:16}},"🚀"),"App-Tour starten"),
+    !tourActive&&showStartBtn&&React.createElement("button",{onClick:startTour,style:{position:"fixed",bottom:20,right:16,zIndex:9998,background:C.accent,color:"#060c27",border:"none",borderRadius:50,padding:"12px 20px",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 4px 20px rgba(72,207,253,0.4)",display:"flex",alignItems:"center",gap:8}},
+      React.createElement("span",{style:{fontSize:16}},"🚀"),"App-Tour starten"
+    ),
     !tourActive&&!showStartBtn&&React.createElement("button",{onClick:restartTour,style:{position:"fixed",bottom:20,right:16,zIndex:9998,background:"rgba(72,207,253,0.12)",color:C.accent,border:"1px solid "+C.cardBorder,borderRadius:50,padding:"8px 14px",fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}},"ⓘ Tour"),
-    tourActive&&React.createElement(TourOverlay,{step:currentStep,onNext:handleNext,onSkip:skipTour,inDetail:inDetail})
+    tourActive&&React.createElement(TourOverlay,{
+      step:currentStep,
+      onNext:handleNext,
+      onMinimize:()=>setTourMinimized(true),
+      onExpand:()=>setTourMinimized(false),
+      onAbort:abortTour,
+      inDetail:inDetail,
+      minimized:tourMinimized
+    })
   );
 }
+
 
 ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(Root,null));
 </script>

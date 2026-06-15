@@ -14,6 +14,7 @@
   #error-box { display:none; position:fixed; top:16px; left:50%; transform:translateX(-50%); background:#7f1d1d; color:#fff; padding:12px 20px; border-radius:10px; font-size:13px; z-index:9999; max-width:90vw; }
   .pr-badge { display:inline-block; background: linear-gradient(135deg,#f59e0b,#ef4444); color:#fff; font-size:10px; font-weight:800; padding:2px 6px; border-radius:20px; margin-left:6px; vertical-align:middle; letter-spacing:0.5px; }
   .haptic { transition: transform 0.08s; } .haptic:active { transform: scale(0.94); }
+  .player-row { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 </style>
 </head>
 <body>
@@ -218,7 +219,7 @@ async function savePhoto(playerId,weekKey,file,photoIndex){
   const {data:urlData}=sb.storage.from('player-photos').getPublicUrl(path);
   const url=urlData.publicUrl;
   const {data,error:dbErr}=await sb.from('player_photos').upsert(
-    {player_id:playerId,week:weekKey,month:weekKey,photo_url:url,photo_index:photoIndex,owner_id:uid},
+    {player_id:playerId,week:weekKey,month:weekKey,photo_url:url,photo_index:photoIndex},
     {onConflict:'player_id,week,photo_index'}
   ).select().single();
   if(dbErr)throw dbErr;
@@ -1250,12 +1251,14 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
           filtered.map(p=>React.createElement("button",{
             key:p.id,
             onClick:()=>onSelect(p.id),
-            onTouchStart:()=>handlePressStart(p),
-            onTouchEnd:handlePressEnd,
+            onTouchStart:e=>{e.preventDefault();handlePressStart(p);},
+            onTouchEnd:e=>{e.preventDefault();handlePressEnd();},
             onMouseDown:()=>handlePressStart(p),
             onMouseUp:handlePressEnd,
             onMouseLeave:handlePressEnd,
-            style:{display:"flex",alignItems:"center",gap:14,background:C.cardBg,border:`1px solid ${C.cardBorder}`,borderRadius:14,padding:"12px 14px",color:C.text,textAlign:"left",cursor:"pointer",fontFamily:"inherit"}
+            onContextMenu:e=>e.preventDefault(),
+            className:"player-row",
+            style:{display:"flex",alignItems:"center",gap:14,background:C.cardBg,border:`1px solid ${C.cardBorder}`,borderRadius:14,padding:"12px 14px",color:C.text,textAlign:"left",cursor:"pointer",fontFamily:"inherit",userSelect:"none",WebkitUserSelect:"none"}
           },
             React.createElement("div",{style:{width:42,height:42,borderRadius:"50%",background:"rgba(72,207,253,0.15)",border:`1px solid ${C.accent}`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Saira Condensed',sans-serif",fontWeight:700,fontSize:17,color:C.accent,flexShrink:0}},
               p.name.split(" ").filter(Boolean).map(n=>n[0]).join("")

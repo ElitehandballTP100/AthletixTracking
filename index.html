@@ -129,7 +129,10 @@ async function loadPlayers(){
     const photosMap={};
     photosData.filter(r=>r.player_id===p.id).forEach(r=>{photosMap[r.month]=r.photo_url;});
     const attMap={};
-    attendanceData.filter(r=>r.player_id===p.id).forEach(r=>{attMap[r.week]=r.present;});
+    attendanceData.filter(r=>r.player_id===p.id).forEach(r=>{
+      if(r.day) attMap[r.day]=r.present;
+      else if(r.week) attMap[r.week]=r.present;
+    });
     const pbMap={};
     pbData.filter(r=>r.player_id===p.id).forEach(r=>{pbMap[r.metric_id]={value:Number(r.value),month:r.achieved_month};});
     return{...p,data,motivation:motMap,notes:notesMap,photos:photosMap,attendance:attMap,personalBests:pbMap};
@@ -181,8 +184,12 @@ async function saveNote(playerId,weekKey,text){
   const {error}=await sb.from('notes').upsert({player_id:playerId,week:weekKey,month:weekKey,text},{onConflict:'player_id,month'});
   if(error)throw error;
 }
-async function saveAttendance(playerId,weekKey,present){
-  const {error}=await sb.from('attendance').upsert({player_id:playerId,week:weekKey,present},{onConflict:'player_id,week'});
+async function saveAttendance(playerId,dayKey,present){
+  // dayKey is YYYY-MM-DD
+  const {error}=await sb.from('attendance').upsert(
+    {player_id:playerId,day:dayKey,week:dayKey.slice(0,7),present},
+    {onConflict:'player_id,day'}
+  );
   if(error)throw error;
 }
 async function savePhoto(playerId,monthKey,file){
@@ -391,16 +398,18 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
           React.createElement("input",{placeholder:'z.B. "Combine Jun 2026" oder "Monatsmessung Juli"',value:combineLabel,onChange:e=>setCombineLabel(e.target.value),style:fieldStyle})
         ),
         React.createElement("div",null,
-          React.createElement("label",{style:{fontSize:12,opacity:0.7,display:"block",marginBottom:4}},"DATUM"),
-          React.createElement("input",{type:"date",value:combineDate,onChange:e=>setCombineDate(e.target.value),style:fieldStyle})
+          React.createElement("label",{style:{fontSize:12,opacity:0.7,display:"block",marginBottom:6}},"DATUM"),
+          React.createElement("input",{type:"date",value:combineDate,onChange:e=>setCombineDate(e.target.value),style:{...fieldStyle,colorScheme:"dark"}})
         ),
         React.createElement("div",null,
           React.createElement("label",{style:{fontSize:12,opacity:0.7,display:"block",marginBottom:8}},"TYP"),
-          React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}},
-            [["combine","🎯 Combine","Ersterfassung"],["monatlich","📅 Monatlich","Alle 4 Wochen"],["3monatlich","📊 Quartal","Alle 3 Monate"]].map(([val,icon,label])=>
-              React.createElement(Btn,{key:val,onClick:()=>setCombineType(val),style:{background:combineType===val?C.accent:"rgba(255,255,255,0.05)",color:combineType===val?"#060c27":C.text,border:`1px solid ${combineType===val?C.accent:C.cardBorder}`,borderRadius:12,padding:"10px 8px",fontSize:12,fontWeight:700,textAlign:"center"}},
-                React.createElement("div",null,icon),
-                React.createElement("div",{style:{marginTop:2,fontWeight:600}},label)
+          React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}},
+            [["combine","🎯","Combine","Ersterfassung","Startwerte zum ersten Mal erfassen"],["folgemessung","📊","Folgemessung","Monatlich oder Quartal","Entwicklung weiterverfolgen"]].map(([val,icon,title,sub1,sub2])=>
+              React.createElement(Btn,{key:val,onClick:()=>setCombineType(val),style:{background:combineType===val?C.accent:"rgba(255,255,255,0.05)",color:combineType===val?"#060c27":C.text,border:"2px solid "+(combineType===val?C.accent:C.cardBorder),borderRadius:14,padding:"14px 12px",textAlign:"left",display:"flex",flexDirection:"column",gap:4}},
+                React.createElement("div",{style:{fontSize:22,lineHeight:1}},icon),
+                React.createElement("div",{style:{fontWeight:800,fontSize:15,marginTop:4}},title),
+                React.createElement("div",{style:{fontWeight:600,fontSize:12,opacity:combineType===val?0.8:0.6}},sub1),
+                React.createElement("div",{style:{fontWeight:400,fontSize:11,opacity:combineType===val?0.65:0.45}},sub2)
               )
             )
           )
@@ -569,21 +578,147 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
   );
 }
 
-/* ===== ANWESENHEIT (Woche) ===== */
+/* ===== HELPERS: tagesgenaue Anwesenheit ===== */
+function todayKey(){return new Date().toISOString().slice(0,10);}
+function formatDay(d){return new Date(d+'T12:00:00').toLocaleDateString('de-DE',{weekday:'short',day:'2-digit',month:'2-digit'});}
+
+/* Kalender-Monat bauen: alle Tage eines Monats */
+function buildCalendarMonth(year,month){
+  const days=[];
+  const daysInMonth=new Date(year,month+1,0).getDate();
+  for(let d=1;d<=daysInMonth;d++){
+    const key=`${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    days.push({key,d,dow:new Date(year,month,d).getDay()});
+  }
+  return days;
+}
+
+/* ===== ANWESENHEITS-KALENDER im Spielerprofil ===== */
+function AttendanceCalendar({player,onUpdate}){
+  const now=new Date();
+  const [calYear,setCalYear]=useState(now.getFullYear());
+  const [calMonth,setCalMonth]=useState(now.getMonth());
+  const [saving,setSaving]=useState(null); // day key being saved
+
+  const days=useMemo(()=>buildCalendarMonth(calYear,calMonth),[calYear,calMonth]);
+  const att=player.attendance||{};
+
+  // Stats for this month
+  const monthPrefix=`${calYear}-${String(calMonth+1).padStart(2,'0')}`;
+  const daysThisMonth=days.filter(d=>d.key<=todayKey());
+  const presentCount=daysThisMonth.filter(d=>att[d.key]===true).length;
+  const absentCount=daysThisMonth.filter(d=>att[d.key]===false).length;
+
+  async function toggleDay(dayKey){
+    if(IS_PREVIEW)return;
+    setSaving(dayKey);
+    const cur=att[dayKey];
+    // cycle: undefined -> true -> false -> undefined(remove)
+    let next;
+    if(cur===undefined||cur===null)next=true;
+    else if(cur===true)next=false;
+    else next=undefined;
+    try{
+      if(next===undefined){
+        await sb.from('attendance').delete().match({player_id:player.id,day:dayKey});
+        const newAtt={...att};delete newAtt[dayKey];
+        onUpdate({...player,attendance:newAtt});
+      } else {
+        await saveAttendance(player.id,dayKey,next);
+        onUpdate({...player,attendance:{...att,[dayKey]:next}});
+      }
+    }catch(e){alert("Fehler: "+e.message);}
+    setSaving(null);
+  }
+
+  function prevMonth(){if(calMonth===0){setCalYear(y=>y-1);setCalMonth(11);}else setCalMonth(m=>m-1);}
+  function nextMonth(){if(calMonth===11){setCalYear(y=>y+1);setCalMonth(0);}else setCalMonth(m=>m+1);}
+
+  const DOW_LABELS=['Mo','Di','Mi','Do','Fr','Sa','So'];
+  // first day of month: adjust so Mon=0
+  const firstDow=(new Date(calYear,calMonth,1).getDay()+6)%7;
+
+  return React.createElement(Card,{style:{marginBottom:14}},
+    React.createElement(SectionTitle,null,"📅 Anwesenheits-Kalender"),
+
+    // Month navigation
+    React.createElement("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}},
+      React.createElement(Btn,{onClick:prevMonth,style:{background:"rgba(255,255,255,0.07)",color:C.text,borderRadius:8,padding:"6px 12px",fontSize:16,border:`1px solid ${C.cardBorder}`}},"‹"),
+      React.createElement("span",{style:{fontWeight:700,fontSize:16}},
+        new Date(calYear,calMonth,1).toLocaleDateString('de-DE',{month:'long',year:'numeric'})
+      ),
+      React.createElement(Btn,{onClick:nextMonth,style:{background:"rgba(255,255,255,0.07)",color:C.text,borderRadius:8,padding:"6px 12px",fontSize:16,border:`1px solid ${C.cardBorder}`}},"›")
+    ),
+
+    // Stats bar
+    React.createElement("div",{style:{display:"flex",gap:12,marginBottom:14,fontSize:13}},
+      React.createElement("div",{style:{background:"rgba(34,197,94,0.12)",border:"1px solid #22c55e",borderRadius:8,padding:"6px 12px",flex:1,textAlign:"center"}},
+        React.createElement("div",{style:{fontWeight:800,fontSize:20,color:"#22c55e"}},presentCount),
+        React.createElement("div",{style:{opacity:0.7,fontSize:11}},"Anwesend")
+      ),
+      React.createElement("div",{style:{background:"rgba(239,68,68,0.1)",border:"1px solid #ef4444",borderRadius:8,padding:"6px 12px",flex:1,textAlign:"center"}},
+        React.createElement("div",{style:{fontWeight:800,fontSize:20,color:"#ef4444"}},absentCount),
+        React.createElement("div",{style:{opacity:0.7,fontSize:11}},"Gefehlt")
+      ),
+      React.createElement("div",{style:{background:"rgba(72,207,253,0.1)",border:`1px solid ${C.cardBorder}`,borderRadius:8,padding:"6px 12px",flex:1,textAlign:"center"}},
+        React.createElement("div",{style:{fontWeight:800,fontSize:20,color:C.accent}},daysThisMonth.length-presentCount-absentCount),
+        React.createElement("div",{style:{opacity:0.7,fontSize:11}},"Offen")
+      )
+    ),
+
+    // Day-of-week header
+    React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,marginBottom:4}},
+      DOW_LABELS.map(l=>React.createElement("div",{key:l,style:{textAlign:"center",fontSize:10,opacity:0.5,fontWeight:700,padding:"2px 0"}},l))
+    ),
+
+    // Calendar grid
+    React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3}},
+      // Empty cells before first day
+      Array.from({length:firstDow},(_,i)=>React.createElement("div",{key:"e"+i})),
+      // Day cells
+      days.map(day=>{
+        const isToday=day.key===todayKey();
+        const isFuture=day.key>todayKey();
+        const status=att[day.key];
+        const isSaving=saving===day.key;
+        let bg,border,textColor;
+        if(status===true){bg="#22c55e";border="#22c55e";textColor="#fff";}
+        else if(status===false){bg="rgba(239,68,68,0.25)";border="#ef4444";textColor="#ef4444";}
+        else{bg=isToday?"rgba(72,207,253,0.15)":"rgba(255,255,255,0.04)";border=isToday?C.accent:"rgba(255,255,255,0.1)";textColor=isFuture?"rgba(255,255,255,0.25)":"rgba(255,255,255,0.7)";}
+        return React.createElement(Btn,{
+          key:day.key,
+          onClick:()=>!isFuture&&toggleDay(day.key),
+          disabled:isFuture||isSaving,
+          style:{aspectRatio:"1",borderRadius:8,border:`1px solid ${border}`,background:isSaving?"rgba(72,207,253,0.3)":bg,color:textColor,fontSize:12,fontWeight:isToday?800:500,display:"flex",alignItems:"center",justifyContent:"center",padding:0,minHeight:32,cursor:isFuture?"default":"pointer",opacity:isSaving?0.6:1}
+        },isSaving?"…":String(day.d))
+      })
+    ),
+
+    // Legend
+    React.createElement("div",{style:{display:"flex",gap:14,marginTop:10,fontSize:11,opacity:0.6,justifyContent:"center"}},
+      React.createElement("span",null,"🟢 Anwesend"),
+      React.createElement("span",null,"🔴 Gefehlt"),
+      React.createElement("span",null,"⬜ Offen"),
+      React.createElement("span",null,"(1× tippen = da, 2× = fehlt, 3× = löschen)")
+    )
+  );
+}
+
+/* ===== ANWESENHEIT TAGESERFASSUNG (alle Spieler, ein Tag) ===== */
 function AttendanceView({players,onPlayersUpdated,onClose}){
-  const [week,setWeek]=useState(CURRENT_WEEK);
-  const [status,setStatus]=useState({});// pid -> bool
+  const [day,setDay]=useState(todayKey());
+  const [status,setStatus]=useState({});
   const [saving,setSaving]=useState(false);
   const [done,setDone]=useState(false);
 
   useEffect(()=>{
     const s={};
     players.forEach(p=>{
-      const v=p.attendance[week];
+      const v=(p.attendance||{})[day];
       s[p.id]=v===undefined?true:v;
     });
     setStatus(s);
-  },[week,players]);
+  },[day,players]);
 
   function toggle(pid){setStatus(prev=>({...prev,[pid]:!prev[pid]}));}
 
@@ -593,8 +728,8 @@ function AttendanceView({players,onPlayersUpdated,onClose}){
       const updates=[];
       for(const p of players){
         const present=status[p.id]!==false;
-        await saveAttendance(p.id,week,present);
-        updates.push({...p,attendance:{...p.attendance,[week]:present}});
+        await saveAttendance(p.id,day,present);
+        updates.push({...p,attendance:{...(p.attendance||{}),[day]:present}});
       }
       onPlayersUpdated(updates);
       setDone(true);
@@ -603,24 +738,25 @@ function AttendanceView({players,onPlayersUpdated,onClose}){
   }
 
   const present=Object.values(status).filter(Boolean).length;
-  const weekObj=WEEKS.find(w=>w.key===week);
+  const dayLabel=formatDay(day);
 
   if(done) return React.createElement("div",{style:{textAlign:"center",padding:40}},
     React.createElement("div",{style:{fontSize:48,marginBottom:12}},"✅"),
     React.createElement("h2",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:22,margin:"0 0 8px"}},"Anwesenheit gespeichert"),
-    React.createElement("p",{style:{opacity:0.7,marginBottom:24}},`${present} von ${players.length} anwesend`),
+    React.createElement("p",{style:{opacity:0.7,marginBottom:24}},`${present} von ${players.length} · ${dayLabel}`),
     React.createElement(Btn,{onClick:onClose,style:{background:C.accent,color:"#060c27",borderRadius:12,padding:"13px 30px",fontWeight:700,fontSize:16}},"Fertig")
   );
 
   return React.createElement("div",null,
     React.createElement("button",{onClick:onClose,style:{background:"none",border:"none",color:C.accent,fontSize:15,cursor:"pointer",padding:0,marginBottom:16,fontFamily:"inherit"}},"‹ Zurück"),
     React.createElement(Card,{style:{marginBottom:12}},
-      React.createElement(SectionTitle,{sub:weekObj?weekObj.full:""},"📋 Anwesenheit"),
-      React.createElement("select",{value:week,onChange:e=>setWeek(e.target.value),style:{...fieldStyle,marginBottom:12}},
-        WEEKS.map(w=>React.createElement("option",{key:w.key,value:w.key},w.full))
+      React.createElement(SectionTitle,{sub:"Wähle den Tag, dann abhaken"},"📋 Tages-Anwesenheit"),
+      React.createElement("div",{style:{marginBottom:12}},
+        React.createElement("label",{style:{fontSize:12,opacity:0.6,display:"block",marginBottom:6}},"TAG"),
+        React.createElement("input",{type:"date",value:day,onChange:e=>setDay(e.target.value),style:{...fieldStyle,colorScheme:"dark"}})
       ),
-      React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,fontSize:13,opacity:0.7}},
-        React.createElement("span",null,`${present} anwesend · ${players.length-present} abwesend`),
+      React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}},
+        React.createElement("span",{style:{fontSize:13,opacity:0.7}},`${present} anwesend · ${players.length-present} fehlen`),
         React.createElement("div",{style:{display:"flex",gap:8}},
           React.createElement(Btn,{onClick:()=>{const s={};players.forEach(p=>{s[p.id]=true;});setStatus(s);},style:{background:"rgba(34,197,94,0.2)",color:"#22c55e",border:"1px solid #22c55e",borderRadius:8,padding:"5px 10px",fontSize:12,fontWeight:700}},"Alle ✓"),
           React.createElement(Btn,{onClick:()=>{const s={};players.forEach(p=>{s[p.id]=false;});setStatus(s);},style:{background:"rgba(239,68,68,0.15)",color:"#ef4444",border:"1px solid #ef4444",borderRadius:8,padding:"5px 10px",fontSize:12,fontWeight:700}},"Alle ✗")
@@ -630,7 +766,7 @@ function AttendanceView({players,onPlayersUpdated,onClose}){
         players.map(p=>{
           const here=status[p.id]!==false;
           return React.createElement(Btn,{key:p.id,onClick:()=>toggle(p.id),style:{display:"flex",alignItems:"center",gap:12,background:here?"rgba(34,197,94,0.12)":"rgba(239,68,68,0.08)",border:`2px solid ${here?"#22c55e":"#ef4444"}`,borderRadius:12,padding:"12px 14px",color:C.text,textAlign:"left"}},
-            React.createElement("span",{style:{width:28,height:28,borderRadius:"50%",background:here?"#22c55e":"#ef4444",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0,fontWeight:800}},here?"✓":"✗"),
+            React.createElement("span",{style:{width:28,height:28,borderRadius:"50%",background:here?"#22c55e":"#ef4444",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0,fontWeight:800}},here?"✓":"✗"),
             React.createElement("div",{style:{flex:1}},
               React.createElement("div",{style:{fontWeight:600,fontSize:15}},p.name),
               React.createElement("div",{style:{fontSize:12,opacity:0.6}},p.position||"—")
@@ -835,8 +971,8 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
               ),
               React.createElement("div",{style:{opacity:0.65,fontSize:13}},p.position||"—"),
               // Attendance dot
-              React.createElement("div",{style:{fontSize:11,marginTop:2,color:p.attendance[CURRENT_WEEK]===false?"#ef4444":"rgba(255,255,255,0.4)"}},
-                p.attendance[CURRENT_WEEK]===false?"✗ Fehlt diese Woche":p.attendance[CURRENT_WEEK]===true?"✓ Anwesend":""
+              React.createElement("div",{style:{fontSize:11,marginTop:2,color:(p.attendance||{})[todayKey()]===false?"#ef4444":(p.attendance||{})[todayKey()]===true?"#22c55e":"rgba(255,255,255,0.3)"}},
+                (p.attendance||{})[todayKey()]===false?"✗ Fehlt heute":(p.attendance||{})[todayKey()]===true?"✓ Heute anwesend":""
               )
             ),
             React.createElement(MotDot,{value:p.motivation[CURRENT_WEEK]}),
@@ -1175,6 +1311,8 @@ function PlayerDetail({player,onBack,onUpdate,onDelete}){
     ),
 
     React.createElement(PhotoSection,{player,onUpdate}),
+
+    React.createElement(AttendanceCalendar,{player,onUpdate}),
 
     React.createElement(Card,{style:{marginBottom:14}},
       React.createElement(SectionTitle,null,"Entwicklungsübersicht"),

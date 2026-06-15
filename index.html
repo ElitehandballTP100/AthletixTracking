@@ -403,6 +403,7 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
       }
       onPlayersUpdated(updates);
       setSaved(true);
+      if(window.fireTourEvent)window.fireTourEvent("combine_done");
     }catch(e){alert("Fehler: "+e.message);}
     setSaving(false);
   }
@@ -760,6 +761,7 @@ function AttendanceView({players,onPlayersUpdated,onClose}){
       }
       onPlayersUpdated(updates);
       setDone(true);
+      if(window.fireTourEvent)window.fireTourEvent("attendance_saved");
     }catch(e){alert("Fehler: "+e.message);}
     setSaving(false);
   }
@@ -954,6 +956,7 @@ function QuickMotivationModal({player,onClose,onSaved,onPhotoSaved,onBodySaved})
       }
       onBodySaved(updated);
       setBodySaved(true);
+      if(window.fireTourEvent)window.fireTourEvent("quick_body_saved");
     }catch(e){alert("Fehler: "+e.message);}
     setSavingBody(false);
   }
@@ -1180,7 +1183,7 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
 
   if(view==="combine") return React.createElement(CombineView,{players,combines,onClose:()=>setView("list"),onPlayersUpdated,onCombineCreated});
   if(view==="attendance") return React.createElement(AttendanceView,{players,onPlayersUpdated,onClose:()=>setView("list")});
-  if(view==="motivation") return React.createElement(MotivationRound,{players,onPlayersUpdated,onClose:()=>setView("list")});
+  if(view==="motivation"){if(window.fireTourEvent)window.fireTourEvent("motivation_round_opened");return React.createElement(MotivationRound,{players,onPlayersUpdated,onClose:()=>setView("list")});}
 
   return React.createElement("div",null,
     /* Header */
@@ -1337,7 +1340,10 @@ function DevSummary({player,onUpdate}){
   }),[player]);
 
   function toggle(id){
-    setOpenId(prev=>prev===id?null:id);
+    setOpenId(prev=>{
+      if(prev!==id&&window.fireTourEvent)window.fireTourEvent("graph_opened");
+      return prev===id?null:id;
+    });
     setInputVal("");
     setInputMonth(CURRENT_MONTH);
   }
@@ -1585,7 +1591,7 @@ function NotesSection({player,onUpdate}){
   async function handleSaveNote(){
     if(IS_PREVIEW)return;
     setSavingNote(true);
-    try{await saveNote(player.id,noteWeek,noteText);onUpdate({...player,notes:{...(player.notes||{}),[noteWeek]:noteText}});}
+    try{await saveNote(player.id,noteWeek,noteText);onUpdate({...player,notes:{...(player.notes||{}),[noteWeek]:noteText}});if(window.fireTourEvent)window.fireTourEvent("note_saved");}
     catch(e){alert("Fehler: "+e.message);}
     setSavingNote(false);
   }
@@ -1613,7 +1619,7 @@ function MotivationSection({player,onUpdate}){
   const [motWeek,setMotWeek]=useState(CURRENT_WEEK);
   async function setMotivation(value){
     if(IS_PREVIEW)return;
-    try{await saveMotivation(player.id,motWeek,value);onUpdate({...player,motivation:{...player.motivation,[motWeek]:value}});}
+    try{await saveMotivation(player.id,motWeek,value);onUpdate({...player,motivation:{...player.motivation,[motWeek]:value}});if(window.fireTourEvent)window.fireTourEvent("motivation_set");}
     catch(e){alert("Fehler: "+e.message);}
   }
   const last8=WEEKS.slice(0,8);
@@ -1732,38 +1738,7 @@ function PlayerDetail({player,onBack,onUpdate,onDelete}){
 }
 
 /* ===== APP ===== */
-function App(){
-  const [players,setPlayers]=useState([]);
-  const [combines,setCombines]=useState([]);
-  const [loading,setLoading]=useState(true);
-  const [selectedId,setSelectedId]=useState(null);
-  const selected=players.find(p=>p.id===selectedId);
 
-  useEffect(()=>{
-    Promise.all([loadPlayers(),loadCombines()])
-      .then(([pls,cmbs])=>{setPlayers(pls);setCombines(cmbs);setLoading(false);})
-      .catch(err=>{
-        var b=document.getElementById('error-box');b.style.display='block';
-        b.textContent='Supabase Fehler: '+err.message;setLoading(false);
-      });
-  },[]);
-
-  function updatePlayer(updated){setPlayers(prev=>prev.map(p=>p.id===updated.id?updated:p));}
-  function updatePlayers(updates){setPlayers(prev=>{let next=[...prev];updates.forEach(u=>{const i=next.findIndex(p=>p.id===u.id);if(i>=0)next[i]=u;});return next;});}
-  function addPlayer(p){setPlayers(prev=>[...prev,p].sort((a,b)=>a.name.localeCompare(b.name)));}
-  function removePlayer(id){setPlayers(prev=>prev.filter(p=>p.id!==id));setSelectedId(null);}
-  function addCombine(c){setCombines(prev=>[c,...prev]);}
-
-  if(loading) return React.createElement("div",{style:{padding:40,textAlign:"center",opacity:0.6,fontFamily:"'Saira',sans-serif"}},"Daten werden geladen…");
-
-  return React.createElement("div",{style:{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:"'Saira',sans-serif",padding:"20px 16px 60px"}},
-    React.createElement("div",{style:{maxWidth:480,margin:"0 auto"}},
-      selected
-        ?React.createElement(PlayerDetail,{player:selected,onBack:()=>setSelectedId(null),onUpdate:updatePlayer,onDelete:removePlayer})
-        :React.createElement(PlayerList,{players,combines,onSelect:setSelectedId,onAdd:addPlayer,onPlayersUpdated:updatePlayers,onCombineCreated:addCombine})
-    )
-  );
-}
 
 /* ===== LOGIN ===== */
 function Login(){
@@ -1806,7 +1781,160 @@ function Root(){
   if(!session)return React.createElement(Login,null);
   return React.createElement(React.Fragment,null,
     React.createElement("button",{onClick:()=>sb.auth.signOut(),style:{position:"fixed",top:"10px",right:"10px",zIndex:9999,background:"rgba(255,255,255,0.12)",color:C.text,border:"1px solid "+C.cardBorder,borderRadius:"8px",padding:"6px 12px",fontSize:"12px",cursor:"pointer"}},"Abmelden"),
-    React.createElement(App,null)
+    React.createElement(AppWithTour,null)
+  );
+}
+
+function AppWithTour(){
+  const [players,setPlayers]=useState([]);
+  const [combines,setCombines]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [selectedId,setSelectedId]=useState(null);
+  const selected=players.find(p=>p.id===selectedId);
+
+  useEffect(()=>{
+    Promise.all([loadPlayers(),loadCombines()])
+      .then(([pls,cmbs])=>{setPlayers(pls);setCombines(cmbs);setLoading(false);})
+      .catch(err=>{
+        var b=document.getElementById('error-box');b.style.display='block';
+        b.textContent='Supabase Fehler: '+err.message;setLoading(false);
+      });
+  },[]);
+
+  function updatePlayer(updated){setPlayers(prev=>prev.map(p=>p.id===updated.id?updated:p));}
+  function updatePlayers(updates){setPlayers(prev=>{let next=[...prev];updates.forEach(u=>{const i=next.findIndex(p=>p.id===u.id);if(i>=0)next[i]=u;});return next;});}
+  function addPlayer(p){setPlayers(prev=>[...prev,p].sort((a,b)=>a.name.localeCompare(b.name)));}
+  function removePlayer(id){setPlayers(prev=>prev.filter(p=>p.id!==id));setSelectedId(null);}
+  function addCombine(c){setCombines(prev=>[c,...prev]);}
+
+  if(loading) return React.createElement("div",{style:{padding:40,textAlign:"center",opacity:0.6,fontFamily:"'Saira',sans-serif"}},"Daten werden geladen…");
+
+  const appContent=React.createElement("div",{style:{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:"'Saira',sans-serif",padding:"20px 16px 60px"}},
+    React.createElement("div",{style:{maxWidth:480,margin:"0 auto"}},
+      selected
+        ?React.createElement(PlayerDetail,{player:selected,onBack:()=>{setSelectedId(null);if(window.fireTourEvent)window.fireTourEvent("went_back");},onUpdate:updatePlayer,onDelete:removePlayer})
+        :React.createElement(PlayerList,{players,combines,onSelect:setSelectedId,onAdd:addPlayer,onPlayersUpdated:updatePlayers,onCombineCreated:addCombine})
+    )
+  );
+
+  return React.createElement(TourManager,{
+    players,
+    onPlayersUpdated:updatePlayers,
+    onAddPlayer:addPlayer,
+    onRemovePlayer:removePlayer,
+    onSelectPlayer:setSelectedId,
+    selectedId
+  },appContent);
+}
+
+/* ===== ONBOARDING TOUR ===== */
+const TOUR_STEPS=[
+  {id:"welcome",emoji:"🚀",title:"Willkommen im Athletik-Tracker!",text:"Diese Tour führt dich durch den echten Ablauf — genau so wie du ihn mit deiner Mannschaft durchführst. Du übst alles an einem Demo-Spieler (Max Mustermann), der am Ende automatisch gelöscht wird.",hint:null,trigger:null},
+  {id:"player_created",emoji:"👤",title:"Schritt 1: Spieler anlegen",text:"Max Mustermann wurde angelegt — genau wie du deine echten Spieler einträgst: Name, Position, Trainingsplan, Startdatum. Tippe jetzt auf Max in der Liste um sein Profil zu öffnen.",hint:"Tippe auf 'Max Mustermann' in der Kaderliste",trigger:null},
+  {id:"combine_first",emoji:"⚡",title:"Schritt 2: Ersterfassung (Combine)",text:"Vor dem allerersten Training erfasst du einmalig alle Startwerte — das ist die Baseline für den Entwicklungsgraph. Geh zurück, tippe ⚡ Combine, wähle 'Combine Ersterfassung', wähle Max, trage mindestens eine Übung ein und speichere.",hint:"‹ Zurück → ⚡ Combine → Ersterfassung → Max wählen → Wert eintragen → Speichern",trigger:"combine_done"},
+  {id:"attendance",emoji:"📋",title:"Schritt 3: Anwesenheit — immer als erstes",text:"Direkt wenn die Gruppe ankommt: Anwesenheit erfassen. Das kostet 30 Sekunden. Tippe 📋 Anwesenheit, wähle heute aus, markiere Max als anwesend und speichere.",hint:"📋 Anwesenheit → heute wählen → Max ✓ → Speichern",trigger:"attendance_saved"},
+  {id:"long_press_motivation",emoji:"🟢",title:"Schritt 4: Live-Motivation per Lang-Druck",text:"Während du die Gruppe observierst: Lang auf einen Spielernamen drücken (~1 Sek.) — Schnell-Popup öffnet sich. Setze für Max eine Motivationsfarbe. Das geht ohne das Profil zu öffnen.",hint:"Lang drücken auf Max Mustermann → Motivationsfarbe antippen",trigger:"motivation_set"},
+  {id:"long_press_note",emoji:"🎙",title:"Schritt 5: Sprachnotiz per Lang-Druck",text:"Fällt dir etwas auf? Lang auf Max drücken → 🎙 Sprechen → kurzen Satz sprechen → stoppen → speichern. Alles live, ohne Tippen, ohne das Profil zu öffnen.",hint:"Lang drücken → 🎙 Sprechen → sprechen → ⏹ Stop → Speichern",trigger:"note_saved"},
+  {id:"followup_combine",emoji:"📊",title:"Schritt 6: Folgemessung (monatl./quartalsw.)",text:"Nach 4–12 Wochen trägst du neue Werte ein — dann zeigt der Graph echten Fortschritt. Starte eine Folgemessung: ⚡ Combine → Folgemessung → Max → einen anderen Wert eintragen als vorhin → Speichern.",hint:"⚡ Combine → Folgemessung → Max → anderen Wert → Speichern",trigger:"combine_done"},
+  {id:"see_graph",emoji:"📈",title:"Schritt 7: Entwicklungsgraph ablesen",text:"Jetzt wird es interessant. Öffne Max' Profil, scrolle zur Entwicklungsübersicht und tippe auf die Übung für die du Werte eingetragen hast — der Graph klappt auf und zeigt den Fortschritt.",hint:"Tippe auf Max → Entwicklungsübersicht → Übung antippen → Graph öffnet sich",trigger:"graph_opened"},
+  {id:"motivation_round",emoji:"🟢",title:"Schritt 8: Motivationsrunde für alle",text:"Nach dem Training: 🟢 Motivationsrunde — alle Spieler auf einem Bildschirm, du tippst pro Spieler eine Farbe. Ideal für die letzten 2 Minuten nach der Einheit.",hint:"‹ Zurück → 🟢 Motivationsrunde → Farbe für Max antippen",trigger:"motivation_round_opened"},
+  {id:"done",emoji:"🎉",title:"Du kennst den echten Ablauf!",text:"Einmalig Combine → Bei jeder Einheit: Anwesenheit + Live-Motivation + Sprachnotizen → Monatlich/Quartalsweise: Folgemessung → Graph zeigt Entwicklung. Max Mustermann wird jetzt gelöscht.",hint:null,trigger:null}
+];
+
+function TourOverlay({step,onNext,onSkip}){
+  const stepNum=TOUR_STEPS.findIndex(s=>s.id===step.id);
+  const isFirst=stepNum===0;
+  const isLast=step.id==="done";
+  const isWaiting=!isFirst&&!isLast&&step.trigger!==null;
+  const progress=Math.round((stepNum/(TOUR_STEPS.length-1))*100);
+  return React.createElement("div",{style:{position:"fixed",bottom:0,left:0,right:0,zIndex:10000,padding:"0 12px 16px",pointerEvents:"none"}},
+    React.createElement("div",{style:{maxWidth:480,margin:"0 auto",background:"linear-gradient(135deg,#0a1535,#0d2040)",border:"2px solid "+C.accent,borderRadius:20,padding:18,boxShadow:"0 -4px 40px rgba(72,207,253,0.35)",pointerEvents:"all"}},
+      React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:12}},
+        React.createElement("div",{style:{flex:1,height:3,background:"rgba(255,255,255,0.1)",borderRadius:2}},
+          React.createElement("div",{style:{width:progress+"%",height:"100%",background:C.accent,borderRadius:2,transition:"width 0.4s"}})
+        ),
+        React.createElement("span",{style:{fontSize:11,opacity:0.5,flexShrink:0}},stepNum+"/"+(TOUR_STEPS.length-1)),
+        React.createElement("button",{onClick:onSkip,style:{background:"none",border:"none",color:"rgba(255,255,255,0.35)",fontSize:11,cursor:"pointer",padding:"2px 4px",fontFamily:"inherit"}},"Überspringen")
+      ),
+      React.createElement("div",{style:{display:"flex",gap:12,alignItems:"flex-start",marginBottom:step.hint?10:12}},
+        React.createElement("span",{style:{fontSize:26,lineHeight:1,flexShrink:0,marginTop:2}},step.emoji),
+        React.createElement("div",null,
+          React.createElement("div",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:18,fontWeight:700,color:C.accent,marginBottom:5}},step.title),
+          React.createElement("p",{style:{fontSize:13,opacity:0.85,margin:0,lineHeight:1.55}},step.text)
+        )
+      ),
+      step.hint&&React.createElement("div",{style:{background:"rgba(72,207,253,0.1)",border:"1px solid rgba(72,207,253,0.25)",borderRadius:10,padding:"8px 12px",marginBottom:12,fontSize:12,color:C.accent,lineHeight:1.4}},"👆 "+step.hint),
+      (isFirst||isLast||!isWaiting)&&React.createElement(Btn,{onClick:onNext,style:{width:"100%",background:isLast?"#22c55e":C.accent,color:"#060c27",borderRadius:12,padding:"12px",fontWeight:800,fontSize:15}},isFirst?"Tour starten →":isLast?"✓ Fertig — Demo-Spieler löschen":"Weiter →"),
+      isWaiting&&React.createElement("div",{style:{textAlign:"center",fontSize:12,opacity:0.45,padding:"6px 0"}},"⏳ Warte auf deine Aktion oben…")
+    )
+  );
+}
+
+function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSelectPlayer,selectedId,children}){
+  const TOUR_KEY="athletik_tour_v2";
+  const [tourActive,setTourActive]=useState(false);
+  const [stepId,setStepId]=useState("welcome");
+  const [demoPlayer,setDemoPlayer]=useState(null);
+  const [showStartBtn,setShowStartBtn]=useState(false);
+  const stepIdRef=useRef("welcome");
+  const advanceRef=useRef(null);
+
+  useEffect(()=>{stepIdRef.current=stepId;},[stepId]);
+  useEffect(()=>{try{if(!localStorage.getItem(TOUR_KEY))setShowStartBtn(true);}catch(_){setShowStartBtn(true);}},[]);
+
+  useEffect(()=>{
+    function onEvt(e){
+      const type=(e.detail||{}).type;
+      const step=TOUR_STEPS.find(s=>s.id===stepIdRef.current);
+      if(step&&step.trigger===type&&advanceRef.current)advanceRef.current();
+    }
+    window.addEventListener("tour_event",onEvt);
+    return()=>window.removeEventListener("tour_event",onEvt);
+  },[]);
+
+  function advance(){const idx=TOUR_STEPS.findIndex(s=>s.id===stepIdRef.current);if(idx<TOUR_STEPS.length-1)setStepId(TOUR_STEPS[idx+1].id);}
+  advanceRef.current=advance;
+  window.fireTourEvent=function(type){window.dispatchEvent(new CustomEvent("tour_event",{detail:{type}}));};
+
+  function getDemo(){return players.find(p=>p.email==="demo@tour.test")||demoPlayer;}
+
+  async function startTour(){
+    const ex=players.find(p=>p.email==="demo@tour.test");
+    if(ex){await deletePlayerFromDB(ex.id).catch(()=>{});onRemovePlayer(ex.id);}
+    setTourActive(true);setStepId("welcome");
+    try{
+      const demo=await addPlayerToDB({name:"Max Mustermann",position:"Rückraum Mitte",email:"demo@tour.test",age:24,plan:"TP100 Trainingsplan",plan_start_date:todayKey(),weight:"",height:""});
+      setDemoPlayer(demo);onAddPlayer(demo);
+    }catch(e){console.error(e);}
+  }
+
+  async function handleNext(){
+    const step=TOUR_STEPS.find(s=>s.id===stepId);if(!step)return;
+    if(step.id==="welcome"){advance();return;}
+    if(step.id==="player_created"){const d=getDemo();if(d)onSelectPlayer(d.id);advance();return;}
+    if(step.id==="see_graph"){advance();return;}
+    if(step.id==="done"){
+      const d=getDemo();if(d){await deletePlayerFromDB(d.id).catch(()=>{});onRemovePlayer(d.id);}
+      try{localStorage.setItem(TOUR_KEY,"1");}catch(_){}
+      setTourActive(false);setShowStartBtn(false);setDemoPlayer(null);return;
+    }
+    if(!step.trigger){advance();return;}
+  }
+
+  async function skipTour(){
+    const d=getDemo();if(d){await deletePlayerFromDB(d.id).catch(()=>{});onRemovePlayer(d.id);}
+    try{localStorage.setItem(TOUR_KEY,"1");}catch(_){}
+    setTourActive(false);setShowStartBtn(false);
+  }
+
+  function restartTour(){try{localStorage.removeItem(TOUR_KEY);}catch(_){}setShowStartBtn(false);startTour();}
+
+  const currentStep=TOUR_STEPS.find(s=>s.id===stepId)||TOUR_STEPS[0];
+  return React.createElement(React.Fragment,null,
+    children,
+    !tourActive&&showStartBtn&&React.createElement("button",{onClick:startTour,style:{position:"fixed",bottom:20,right:16,zIndex:9998,background:C.accent,color:"#060c27",border:"none",borderRadius:50,padding:"12px 20px",fontWeight:800,fontSize:13,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 4px 20px rgba(72,207,253,0.4)",display:"flex",alignItems:"center",gap:8}},React.createElement("span",{style:{fontSize:16}},"🚀"),"App-Tour starten"),
+    !tourActive&&!showStartBtn&&React.createElement("button",{onClick:restartTour,style:{position:"fixed",bottom:20,right:16,zIndex:9998,background:"rgba(72,207,253,0.12)",color:C.accent,border:"1px solid "+C.cardBorder,borderRadius:50,padding:"8px 14px",fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}},"ⓘ Tour"),
+    tourActive&&React.createElement(TourOverlay,{step:currentStep,onNext:handleNext,onSkip:skipTour})
   );
 }
 

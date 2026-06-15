@@ -1185,12 +1185,28 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
     );
   }
 
-  // Long-press: 600ms -> quick motivation, 1200ms -> quick note
+  // Long-press detection: 600ms threshold
+  // Short tap → onSelect; Long press → quick popup
+  const pressStartRef=useRef(null);
   function handlePressStart(p){
-    const t1=setTimeout(()=>{setQuickMotPlayer(p);},600);
-    setLongPressTimer(t1);
+    pressStartRef.current={player:p,time:Date.now(),fired:false};
+    const t=setTimeout(()=>{
+      if(pressStartRef.current&&!pressStartRef.current.fired){
+        pressStartRef.current.fired=true;
+        setQuickMotPlayer(p);
+      }
+    },600);
+    setLongPressTimer(t);
   }
-  function handlePressEnd(){if(longPressTimer){clearTimeout(longPressTimer);setLongPressTimer(null);}}
+  function handlePressEnd(p){
+    if(longPressTimer){clearTimeout(longPressTimer);setLongPressTimer(null);}
+    // If not a long press, treat as tap → navigate
+    if(pressStartRef.current&&!pressStartRef.current.fired){
+      pressStartRef.current.fired=true;
+      onSelect(p.id);
+    }
+    pressStartRef.current=null;
+  }
 
   if(view==="combine") return React.createElement(CombineView,{players,combines,onClose:()=>setView("list"),onPlayersUpdated,onCombineCreated});
   if(view==="attendance") return React.createElement(AttendanceView,{players,onPlayersUpdated,onClose:()=>setView("list")});
@@ -1264,12 +1280,11 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
       :React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:10}},
           filtered.map(p=>React.createElement("button",{
             key:p.id,
-            onClick:()=>onSelect(p.id),
-            onTouchStart:e=>{e.preventDefault();handlePressStart(p);},
-            onTouchEnd:e=>{e.preventDefault();handlePressEnd();},
+            onTouchStart:e=>{handlePressStart(p);},
+            onTouchEnd:e=>{e.preventDefault();handlePressEnd(p);},
             onMouseDown:()=>handlePressStart(p),
-            onMouseUp:handlePressEnd,
-            onMouseLeave:handlePressEnd,
+            onMouseUp:()=>handlePressEnd(p),
+            onMouseLeave:()=>{if(longPressTimer){clearTimeout(longPressTimer);setLongPressTimer(null);}pressStartRef.current=null;},
             onContextMenu:e=>e.preventDefault(),
             className:"player-row",
             style:{display:"flex",alignItems:"center",gap:14,background:C.cardBg,border:`1px solid ${C.cardBorder}`,borderRadius:14,padding:"12px 14px",color:C.text,textAlign:"left",cursor:"pointer",fontFamily:"inherit",userSelect:"none",WebkitUserSelect:"none"}

@@ -126,8 +126,15 @@ async function loadPlayers(){
     motivation.filter(r=>r.player_id===p.id).forEach(r=>{motMap[r.week||r.month]=r.value;});
     const notesMap={};
     (notesData||[]).filter(r=>r.player_id===p.id).forEach(r=>{notesMap[r.week||r.month]=r.text;});
+    // photos: { weekKey: [{id, url, index}] }
     const photosMap={};
-    photosData.filter(r=>r.player_id===p.id).forEach(r=>{photosMap[r.month]=r.photo_url;});
+    photosData.filter(r=>r.player_id===p.id).forEach(r=>{
+      const key=r.week||r.month;
+      if(!photosMap[key])photosMap[key]=[];
+      photosMap[key].push({id:r.id,url:r.photo_url,index:r.photo_index||0});
+    });
+    // sort each week's photos by index
+    Object.keys(photosMap).forEach(k=>photosMap[k].sort((a,b)=>a.index-b.index));
     const attMap={};
     attendanceData.filter(r=>r.player_id===p.id).forEach(r=>{
       if(r.day) attMap[r.day]=r.present;
@@ -202,16 +209,24 @@ async function saveAttendance(playerId,dayKey,present){
   );
   if(error)throw error;
 }
-async function savePhoto(playerId,monthKey,file){
-  const ext=file.name.split('.').pop()||'jpg';
-  const path=`${playerId}/${monthKey}.${ext}`;
+async function savePhoto(playerId,weekKey,file,photoIndex){
+  const uid=await getUid();
+  const ext=(file.name||'photo').split('.').pop()||'jpg';
+  const path=`${playerId}/${weekKey}_${photoIndex}.${ext}`;
   const {error:upErr}=await sb.storage.from('player-photos').upload(path,file,{upsert:true});
   if(upErr)throw upErr;
   const {data:urlData}=sb.storage.from('player-photos').getPublicUrl(path);
   const url=urlData.publicUrl;
-  const {error:dbErr}=await sb.from('player_photos').upsert({player_id:playerId,month:monthKey,photo_url:url},{onConflict:'player_id,month'});
+  const {data,error:dbErr}=await sb.from('player_photos').upsert(
+    {player_id:playerId,week:weekKey,month:weekKey,photo_url:url,photo_index:photoIndex,owner_id:uid},
+    {onConflict:'player_id,week,photo_index'}
+  ).select().single();
   if(dbErr)throw dbErr;
-  return url;
+  return {url,id:data.id};
+}
+async function deletePhoto(photoId,storagePath){
+  await sb.from('player_photos').delete().eq('id',photoId);
+  try{await sb.storage.from('player-photos').remove([storagePath]);}catch(_){}
 }
 async function addPlayerToDB(player){
   const uid=await getUid();
@@ -866,10 +881,42 @@ function QuickMotivationModal({player,onClose,onSaved,onPhotoSaved,onBodySaved})
   const [height,setHeight]=useState(player.height?String(player.height):"");
   const [bodySaved,setBodySaved]=useState(false);
   const [savingBody,setSavingBody]=useState(false);
+  const [noteText,setNoteText]=useState("");
+  const [recording,setRecording]=useState(false);
+  const [voiceStatus,setVoiceStatus]=useState("");
+  const [noteSaved,setNoteSaved]=useState(false);
+  const [savingNote,setSavingNote]=useState(false);
+  const recRef=useRef(null);
   const fileInputRef=useRef(null);
+
+  function startVoice(){
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR){alert("Sprachaufnahme nur in Chrome verfügbar.");return;}
+    const rec=new SR();rec.lang="de-DE";rec.continuous=true;rec.interimResults=true;
+    const base=noteText;
+    rec.onresult=e=>{
+      let final="",interim="";
+      for(let i=e.resultIndex;i<e.results.length;i++){if(e.results[i].isFinal)final+=e.results[i][0].transcript+" ";else interim+=e.results[i][0].transcript;}
+      setNoteText((base+final).trimStart()+(interim?" ["+interim+"]":""));
+    };
+    rec.onerror=e=>{setVoiceStatus("Fehler: "+e.error);setRecording(false);};
+    rec.onend=()=>{setNoteText(t=>t.replace(/\s*\[.*?\]/g,"").trim());setRecording(false);setVoiceStatus("Fertig ✓");};
+    rec.start();recRef.current=rec;setRecording(true);setVoiceStatus("🎙 Aufnahme läuft…");
+  }
+  function stopVoice(){if(recRef.current){recRef.current.stop();recRef.current=null;}setRecording(false);}
+
+  async function handleSaveNote(){
+    if(!noteText.trim())return;
+    setSavingNote(true);
+    try{
+      await saveNote(player.id,CURRENT_WEEK,noteText.trim());
+      setNoteSaved(true);setVoiceStatus("");
+    }catch(e){alert("Fehler: "+e.message);}
+    setSavingNote(false);
+  }
   const week=CURRENT_WEEK;
   const weekObj=WEEKS.find(w=>w.key===week);
-  const photoMonth=CURRENT_MONTH;
+  const photoWeek=CURRENT_WEEK;
 
   async function setMot(key){
     setSaving(key);
@@ -884,8 +931,10 @@ function QuickMotivationModal({player,onClose,onSaved,onPhotoSaved,onBodySaved})
     const file=e.target.files[0];if(!file)return;
     setUploading(true);
     try{
-      const url=await savePhoto(player.id,photoMonth,file);
-      onPhotoSaved(player.id,photoMonth,url);
+      const weekPhotos=(player.photos||{})[photoWeek]||[];
+      const nextIndex=weekPhotos.length;
+      const result=await savePhoto(player.id,photoWeek,file,nextIndex);
+      onPhotoSaved(player.id,photoWeek,{id:result.id,url:result.url,index:nextIndex});
       setPhotoTaken(true);
     }catch(e){alert("Foto-Upload fehlgeschlagen: "+e.message);}
     setUploading(false);
@@ -970,7 +1019,28 @@ function QuickMotivationModal({player,onClose,onSaved,onPhotoSaved,onBodySaved})
         React.createElement("span",{style:{fontSize:18}},photoTaken?"✓":"📷"),
         uploading?"Wird hochgeladen…":photoTaken?"Foto gespeichert":"Foto aufnehmen / hochladen"
       ),
-      React.createElement("input",{ref:fileInputRef,type:"file",accept:"image/*",capture:"environment",style:{display:"none"},onChange:handlePhoto})
+      React.createElement("input",{ref:fileInputRef,type:"file",accept:"image/*",capture:"environment",style:{display:"none"},onChange:handlePhoto}),
+
+      // Divider
+      React.createElement("div",{style:{borderTop:`1px solid ${C.cardBorder}`,margin:"16px 0 14px"}}),
+
+      // Schnellnotiz
+      React.createElement("p",{style:{fontSize:12,opacity:0.6,margin:"0 0 10px",textTransform:"uppercase",letterSpacing:0.5}},"Schnellnotiz"),
+      React.createElement("textarea",{
+        value:noteText,onChange:e=>setNoteText(e.target.value),
+        placeholder:"Notiz eingeben oder sprechen…",rows:3,
+        style:{...fieldStyle,resize:"none",lineHeight:1.5,marginBottom:8,fontSize:14}
+      }),
+      React.createElement("div",{style:{display:"flex",gap:8,marginBottom:noteSaved?8:0}},
+        !recording
+          ?React.createElement(Btn,{onClick:startVoice,style:{flex:1,background:"rgba(72,207,253,0.1)",color:C.accent,border:`1px solid ${C.cardBorder}`,borderRadius:10,padding:"10px",fontSize:13,fontWeight:600}},"🎙 Sprechen")
+          :React.createElement(Btn,{onClick:stopVoice,style:{flex:1,background:"#ef4444",color:"#fff",borderRadius:10,padding:"10px",fontSize:13,fontWeight:700}},"⏹ Stop"),
+        React.createElement(Btn,{
+          onClick:handleSaveNote,disabled:savingNote||!noteText.trim()||noteSaved,
+          style:{flex:2,background:noteSaved?"rgba(34,197,94,0.15)":noteText.trim()?"rgba(72,207,253,0.15)":"rgba(255,255,255,0.05)",color:noteSaved?"#22c55e":noteText.trim()?C.accent:"rgba(255,255,255,0.3)",border:`1px solid ${noteSaved?"#22c55e":noteText.trim()?C.accent:"rgba(255,255,255,0.1)"}`,borderRadius:10,padding:"10px",fontSize:13,fontWeight:700}
+        },savingNote?"…":noteSaved?"✓ Gespeichert":"Notiz speichern")
+      ),
+      voiceStatus&&React.createElement("p",{style:{fontSize:11,color:recording?C.accent:"rgba(255,255,255,0.5)",margin:0}},voiceStatus)
     )
   );
 }
@@ -1223,9 +1293,10 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
         onPlayersUpdated([{...p,motivation:{...p.motivation,[week]:key}}]);
         setQuickMotPlayer(null);
       },
-      onPhotoSaved:(pid,month,url)=>{
+      onPhotoSaved:(pid,weekKey,entry)=>{
         const p=players.find(x=>x.id===pid);
-        onPlayersUpdated([{...p,photos:{...(p.photos||{}),[month]:url}}]);
+        const cur=(p.photos||{})[weekKey]||[];
+        onPlayersUpdated([{...p,photos:{...(p.photos||{}),[weekKey]:[...cur,entry]}}]);
       },
       onBodySaved:(updated)=>{
         onPlayersUpdated([updated]);
@@ -1236,43 +1307,131 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
 }
 
 /* ===== ENTWICKLUNGS-ZUSAMMENFASSUNG ===== */
-function DevSummary({player}){
-  const summary=useMemo(()=>METRICS.map(m=>{
-    const series=(player.data[m.id]||[]).filter(s=>s.value!=null);
-    if(series.length<2)return{...m,first:null};
-    const first=series[0].value,last=series[series.length-1].value;
-    const diff=last-first,pct=first!==0?(diff/Math.abs(first))*100:0;
-    const positive=m.higherBetter===null?null:(m.higherBetter?diff>0:diff<0);
-    return{...m,first,last,diff,pct,positive};
-  }).filter(m=>m.first!==null),[player]);
+function MetricChartData(player, metricId){
+  const series=player.data[metricId]||[];
+  const byMonth={};
+  series.forEach(s=>{byMonth[s.month]=s.value;});
+  return MONTHS.filter(m=>byMonth[m.key]!=null).map(m=>({label:m.label,value:byMonth[m.key]}));
+}
 
-  if(summary.length===0)return React.createElement("p",{style:{opacity:0.5,fontSize:13,textAlign:"center",margin:"8px 0"}},"Noch keine Messdaten vorhanden.");
+function DevSummary({player,onUpdate}){
+  const [openId,setOpenId]=useState(null);
+  const [saving,setSaving]=useState(false);
+  const [inputVal,setInputVal]=useState("");
+  const [inputMonth,setInputMonth]=useState(CURRENT_MONTH);
+  const [prToast,setPrToast]=useState(null);
+
+  const allMetrics=useMemo(()=>METRICS.map(m=>{
+    const series=(player.data[m.id]||[]).filter(s=>s.value!=null);
+    const hasSeries=series.length>=2;
+    const first=hasSeries?series[0].value:null;
+    const last=hasSeries?series[series.length-1].value:null;
+    const diff=hasSeries?last-first:null;
+    const pct=(hasSeries&&first!==0)?(diff/Math.abs(first))*100:0;
+    const positive=m.higherBetter===null?null:(hasSeries?(m.higherBetter?diff>0:diff<0):null);
+    const chartData=MetricChartData(player,m.id);
+    return{...m,first,last,diff,pct,positive,hasSeries,chartData};
+  }),[player]);
+
+  function toggle(id){
+    setOpenId(prev=>prev===id?null:id);
+    setInputVal("");
+    setInputMonth(CURRENT_MONTH);
+  }
+
+  async function handleSave(m){
+    if(IS_PREVIEW||inputVal===""||isNaN(Number(inputVal)))return;
+    setSaving(true);
+    try{
+      const val=Number(inputVal);
+      await saveMeasurement(player.id,m.id,inputMonth,val);
+      const series=[...(player.data[m.id]||[])];
+      const idx=series.findIndex(s=>s.month===inputMonth);
+      if(idx>=0)series[idx]={month:inputMonth,value:val};else series.push({month:inputMonth,value:val});
+      series.sort((a,b)=>a.month.localeCompare(b.month));
+      const newPBs={...player.personalBests};
+      if(checkAndUpdatePB(player,m.id,val,inputMonth)){
+        await savePersonalBest(player.id,m.id,val,inputMonth);
+        newPBs[m.id]={value:val,month:inputMonth};
+        setPrToast("🏆 Neuer PB: "+m.name+" "+val+m.unit+"!");
+      }
+      onUpdate({...player,data:{...player.data,[m.id]:series},personalBests:newPBs});
+      setInputVal("");
+    }catch(e){alert("Fehler: "+e.message);}
+    setSaving(false);
+  }
+
+  if(allMetrics.every(m=>!m.hasSeries&&m.chartData.length===0))
+    return React.createElement("p",{style:{opacity:0.5,fontSize:13,textAlign:"center",margin:"8px 0"}},"Noch keine Messdaten vorhanden. Trage Werte über Combine ein.");
+
   return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:8}},
-    summary.map(m=>{
+    allMetrics.map(m=>{
+      const isOpen=openId===m.id;
       const isWeight=m.id==="weight";
       const arrow=m.diff>0?"↑":m.diff<0?"↓":"→";
       const color=isWeight?C.accent:(m.positive===true?"#22c55e":m.positive===false?"#ef4444":C.accent);
-      const barW=Math.min(Math.abs(m.pct),100);
+      const barW=m.hasSeries?Math.min(Math.abs(m.pct),100):0;
       const displayPct=m.higherBetter===false?-m.pct:m.pct;
       const pb=player.personalBests[m.id];
-      return React.createElement("div",{key:m.id,style:{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:"10px 12px"}},
-        React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:isWeight?0:6}},
-          React.createElement("span",{style:{fontSize:13,fontWeight:600,display:"flex",alignItems:"center",gap:4}},
-            m.name,
-            pb&&React.createElement("span",{className:"pr-badge"},`PB ${pb.value}${m.unit}`)
+      const metric=METRICS.find(x=>x.id===m.id);
+
+      return React.createElement("div",{key:m.id,style:{background:isOpen?"rgba(72,207,253,0.06)":"rgba(255,255,255,0.04)",border:`1px solid ${isOpen?C.accent:C.cardBorder}`,borderRadius:12,overflow:"hidden",transition:"border-color 0.2s"}},
+
+        // Clickable header row
+        React.createElement(Btn,{onClick:()=>toggle(m.id),style:{width:"100%",padding:"12px 14px",display:"flex",alignItems:"center",gap:10,background:"transparent",textAlign:"left"}},
+          React.createElement("div",{style:{flex:1,minWidth:0}},
+            React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,marginBottom:m.hasSeries?4:0}},
+              React.createElement("span",{style:{fontWeight:700,fontSize:14}},m.name),
+              pb&&React.createElement("span",{className:"pr-badge"},"PB "+pb.value+m.unit)
+            ),
+            m.hasSeries&&React.createElement("div",null,
+              isWeight
+                ? React.createElement("span",{style:{fontSize:12,color,fontWeight:600}},
+                    `${arrow} ${m.diff>0?"+":""}${Math.round(m.diff*10)/10} ${m.unit}  ·  ${m.first} → ${m.last} ${m.unit}`)
+                : React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8}},
+                    React.createElement("span",{style:{fontSize:11,opacity:0.6,whiteSpace:"nowrap"}},`${m.first} ${m.unit}`),
+                    React.createElement("div",{style:{flex:1,height:3,background:"rgba(255,255,255,0.1)",borderRadius:2,minWidth:40}},
+                      React.createElement("div",{style:{width:barW+"%",height:"100%",background:color,borderRadius:2}})
+                    ),
+                    React.createElement("span",{style:{fontSize:11,color,fontWeight:700,whiteSpace:"nowrap"}},
+                      `${arrow} ${m.diff>0?"+":""}${m.id==="sprint"?m.diff.toFixed(2):Math.round(m.diff)} ${m.unit} (${displayPct>0?"+":""}${displayPct.toFixed(1)}%)`)
+                  )
+            ),
+            !m.hasSeries&&React.createElement("span",{style:{fontSize:11,opacity:0.4}},"Noch keine Daten")
           ),
-          React.createElement("span",{style:{fontSize:13,color,fontWeight:700}},
-            isWeight?`${arrow} ${m.diff>0?"+":""}${Math.round(m.diff*10)/10} ${m.unit}  ·  ${m.first} → ${m.last} ${m.unit}`
-              :`${arrow} ${m.diff>0?"+":""}${m.id==="sprint"?m.diff.toFixed(2):Math.round(m.diff)} ${m.unit} (${displayPct>0?"+":""}${displayPct.toFixed(1)}%)`
+          React.createElement("span",{style:{color:C.accent,fontSize:16,transition:"transform 0.2s",transform:isOpen?"rotate(90deg)":"rotate(0deg)",flexShrink:0}},"›")
+        ),
+
+        // Expandable chart + input
+        isOpen&&React.createElement("div",{style:{padding:"0 14px 14px",borderTop:`1px solid ${C.cardBorder}`}},
+          m.chartData.length>0
+            ? React.createElement("div",{style:{marginLeft:-10,marginTop:12}},
+                React.createElement(ResponsiveContainer,{width:"100%",height:180},
+                  React.createElement(LineChart,{data:m.chartData,margin:{top:8,right:10,bottom:0,left:0}},
+                    React.createElement(CartesianGrid,{stroke:"rgba(255,255,255,0.08)"}),
+                    React.createElement(XAxis,{dataKey:"label",stroke:"rgba(255,255,255,0.6)",tick:{fontSize:11}}),
+                    React.createElement(YAxis,{stroke:"rgba(255,255,255,0.6)",tick:{fontSize:11},width:36,domain:["auto","auto"]}),
+                    React.createElement(Tooltip,{contentStyle:{background:"#060c27",border:"1px solid "+C.accent,borderRadius:10,color:"#fff"},formatter:v=>[v+" "+m.unit,m.name]}),
+                    React.createElement(Line,{type:"monotone",dataKey:"value",stroke:C.accent,strokeWidth:2.5,dot:{r:3,fill:C.accent},activeDot:{r:5}})
+                  )
+                ),
+                React.createElement("p",{style:{textAlign:"center",fontSize:11,opacity:0.5,margin:"4px 0 12px"}},
+                  m.name+" in "+m.unit+(m.higherBetter===true?" · höher = besser":m.higherBetter===false?" · niedriger = besser":""))
+              )
+            : React.createElement("p",{style:{fontSize:12,opacity:0.4,textAlign:"center",margin:"12px 0"}},"Noch kein Graph — trage Werte ein"),
+
+          // Wert eintragen
+          React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:4}},
+            React.createElement("select",{value:inputMonth,onChange:e=>setInputMonth(e.target.value),style:{...fieldStyle,fontSize:13,padding:"8px 10px"}},
+              MONTHS.map(mo=>React.createElement("option",{key:mo.key,value:mo.key},mo.full))
+            ),
+            React.createElement("div",{style:{display:"flex",gap:6}},
+              React.createElement("input",{type:"number",inputMode:"decimal",placeholder:"Wert in "+m.unit,value:inputVal,onChange:e=>setInputVal(e.target.value),style:{...fieldStyle,fontSize:14,padding:"8px 10px",flex:1}}),
+              React.createElement(Btn,{onClick:()=>handleSave(m),disabled:saving||inputVal==="",style:{background:inputVal?C.accent:"rgba(255,255,255,0.1)",color:inputVal?"#060c27":"rgba(255,255,255,0.3)",borderRadius:10,padding:"8px 14px",fontWeight:700,fontSize:14,flexShrink:0}},saving?"…":"✓")
+            )
           )
         ),
-        !isWeight&&React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,fontSize:11,opacity:0.6}},
-          React.createElement("span",null,`Start: ${m.first} ${m.unit}`),
-          React.createElement("div",{style:{flex:1,height:4,background:"rgba(255,255,255,0.1)",borderRadius:2}},
-            React.createElement("div",{style:{width:`${barW}%`,height:"100%",background:color,borderRadius:2,transition:"width 0.4s"}})
-          ),
-          React.createElement("span",null,`Aktuell: ${m.last} ${m.unit}`)
-        )
+        prToast&&React.createElement(Toast,{msg:prToast,onDone:()=>setPrToast(null)})
       );
     })
   );
@@ -1280,7 +1439,7 @@ function DevSummary({player}){
 
 /* ===== FOTO-SEKTION ===== */
 function PhotoSection({player,onUpdate}){
-  const [photoMonth,setPhotoMonth]=useState(CURRENT_MONTH);
+  const [photoWeek,setPhotoWeek]=useState(CURRENT_WEEK);
   const [uploading,setUploading]=useState(false);
   const [cameraMode,setCameraMode]=useState(false);
   const [stream,setStream]=useState(null);
@@ -1288,7 +1447,10 @@ function PhotoSection({player,onUpdate}){
   const videoRef=useRef(null);
   const canvasRef=useRef(null);
   const fileInputRef=useRef(null);
-  const currentPhotoUrl=(player.photos||{})[photoMonth]||null;
+
+  const weekPhotos=(player.photos||{})[photoWeek]||[];
+  const nextIndex=weekPhotos.length;
+  const weekObj=WEEKS.find(w=>w.key===photoWeek);
 
   async function startCamera(){
     try{
@@ -1306,57 +1468,88 @@ function PhotoSection({player,onUpdate}){
     setCapturedImg(canvas.toDataURL("image/jpeg",0.85));
     stopCamera();
   }
-  async function uploadCaptured(){
-    if(!capturedImg)return;
+  async function uploadFile(file){
     setUploading(true);
     try{
-      const res=await fetch(capturedImg);
-      const blob=await res.blob();
-      const file=new File([blob],`photo_${photoMonth}.jpg`,{type:"image/jpeg"});
-      const url=await savePhoto(player.id,photoMonth,file);
-      onUpdate({...player,photos:{...(player.photos||{}),[photoMonth]:url}});
-      setCapturedImg(null);
+      const result=await savePhoto(player.id,photoWeek,file,nextIndex);
+      const newEntry={id:result.id,url:result.url,index:nextIndex};
+      const updated={...player,photos:{...(player.photos||{}),[photoWeek]:[...weekPhotos,newEntry]}};
+      onUpdate(updated);
     }catch(e){alert("Upload fehlgeschlagen: "+e.message);}
     setUploading(false);
   }
+  async function uploadCaptured(){
+    if(!capturedImg)return;
+    const res=await fetch(capturedImg);
+    const blob=await res.blob();
+    const file=new File([blob],`photo_${photoWeek}_${nextIndex}.jpg`,{type:"image/jpeg"});
+    await uploadFile(file);
+    setCapturedImg(null);
+  }
   async function handleFileUpload(e){
     const file=e.target.files[0];if(!file)return;
-    setUploading(true);
-    try{const url=await savePhoto(player.id,photoMonth,file);onUpdate({...player,photos:{...(player.photos||{}),[photoMonth]:url}});}
-    catch(e){alert("Upload fehlgeschlagen: "+e.message);}
-    setUploading(false);e.target.value="";
+    await uploadFile(file);
+    e.target.value="";
+  }
+  async function handleDelete(photo){
+    try{
+      const path=`${player.id}/${photoWeek}_${photo.index}.jpg`;
+      await deletePhoto(photo.id,path);
+      const newList=weekPhotos.filter(p=>p.id!==photo.id);
+      onUpdate({...player,photos:{...(player.photos||{}),[photoWeek]:newList}});
+    }catch(e){alert("Fehler: "+e.message);}
   }
 
   return React.createElement(Card,{style:{marginBottom:14}},
     React.createElement(SectionTitle,null,"📸 Fotos"),
+
+    // Week selector
     React.createElement("div",{style:{marginBottom:14}},
-      React.createElement("label",{style:{fontSize:12,opacity:0.6,display:"block",marginBottom:6}},"MONAT"),
-      React.createElement("select",{value:photoMonth,onChange:e=>{setPhotoMonth(e.target.value);stopCamera();setCapturedImg(null);},style:fieldStyle},
-        MONTHS.map(m=>React.createElement("option",{key:m.key,value:m.key},m.full))
+      React.createElement("label",{style:{fontSize:12,opacity:0.6,display:"block",marginBottom:6}},"WOCHE"),
+      React.createElement("select",{value:photoWeek,onChange:e=>{setPhotoWeek(e.target.value);stopCamera();setCapturedImg(null);},style:fieldStyle},
+        WEEKS.map(w=>React.createElement("option",{key:w.key,value:w.key},w.full))
       )
     ),
-    currentPhotoUrl&&!capturedImg&&React.createElement("div",{style:{marginBottom:14,borderRadius:12,overflow:"hidden",border:`1px solid ${C.cardBorder}`}},
-      React.createElement("img",{src:currentPhotoUrl,style:{width:"100%",display:"block",maxHeight:280,objectFit:"cover"},alt:"Spielerfoto"})
+
+    // Photo grid
+    weekPhotos.length>0&&React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}},
+      weekPhotos.map(photo=>
+        React.createElement("div",{key:photo.id,style:{position:"relative",borderRadius:10,overflow:"hidden",border:`1px solid ${C.cardBorder}`}},
+          React.createElement("img",{src:photo.url,style:{width:"100%",aspectRatio:"1",objectFit:"cover",display:"block"},alt:"Foto"}),
+          React.createElement("button",{
+            onClick:()=>handleDelete(photo),
+            style:{position:"absolute",top:4,right:4,background:"rgba(0,0,0,0.65)",border:"none",borderRadius:"50%",width:24,height:24,color:"#fff",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}
+          },"✕")
+        )
+      )
     ),
+
+    // Captured preview
     capturedImg&&React.createElement("div",{style:{marginBottom:14}},
       React.createElement("img",{src:capturedImg,style:{width:"100%",borderRadius:12,border:`1px solid ${C.accent}`},alt:"Vorschau"}),
       React.createElement("div",{style:{display:"flex",gap:8,marginTop:10}},
-        React.createElement(Btn,{onClick:uploadCaptured,disabled:uploading,style:{flex:1,background:C.accent,color:"#060c27",borderRadius:10,padding:"11px",fontWeight:700,fontSize:14}},uploading?"Wird gespeichert…":"✓ Foto speichern"),
+        React.createElement(Btn,{onClick:uploadCaptured,disabled:uploading,style:{flex:1,background:C.accent,color:"#060c27",borderRadius:10,padding:"11px",fontWeight:700,fontSize:14}},uploading?"Lädt…":"✓ Speichern"),
         React.createElement(Btn,{onClick:()=>setCapturedImg(null),style:{background:"transparent",color:C.text,border:`1px solid ${C.cardBorder}`,borderRadius:10,padding:"11px 14px",fontSize:14}},"✕")
       )
     ),
+
+    // Camera viewfinder
     cameraMode&&React.createElement("div",{style:{marginBottom:14}},
       React.createElement("video",{ref:videoRef,autoPlay:true,playsInline:true,style:{width:"100%",borderRadius:12,border:`1px solid ${C.accent}`,display:"block"}}),
       React.createElement("div",{style:{display:"flex",gap:8,marginTop:10}},
         React.createElement(Btn,{onClick:capturePhoto,style:{flex:1,background:C.accent,color:"#060c27",borderRadius:10,padding:"11px",fontWeight:700,fontSize:14}},"📸 Aufnehmen"),
-        React.createElement(Btn,{onClick:stopCamera,style:{background:"transparent",color:C.text,border:`1px solid ${C.cardBorder}`,borderRadius:10,padding:"11px 14px",fontSize:14}},"✕ Abbrechen")
+        React.createElement(Btn,{onClick:stopCamera,style:{background:"transparent",color:C.text,border:`1px solid ${C.cardBorder}`,borderRadius:10,padding:"11px 14px",fontSize:14}},"✕")
       )
     ),
+
     React.createElement("canvas",{ref:canvasRef,style:{display:"none"}}),
+
+    // Action buttons
     !cameraMode&&!capturedImg&&React.createElement("div",{style:{display:"flex",gap:8}},
       React.createElement(Btn,{onClick:startCamera,style:{flex:1,background:"rgba(72,207,253,0.12)",color:C.accent,border:`1px solid ${C.cardBorder}`,borderRadius:10,padding:"11px",fontSize:14,fontWeight:600}},"📷 Kamera"),
       React.createElement(Btn,{onClick:()=>fileInputRef.current&&fileInputRef.current.click(),disabled:uploading,style:{flex:1,background:"rgba(72,207,253,0.12)",color:C.accent,border:`1px solid ${C.cardBorder}`,borderRadius:10,padding:"11px",fontSize:14,fontWeight:600}},uploading?"Lädt…":"🖼 Galerie")
     ),
+    weekPhotos.length>0&&React.createElement("p",{style:{fontSize:11,opacity:0.4,textAlign:"center",margin:"8px 0 0"}},`${weekPhotos.length} Foto${weekPhotos.length>1?"s":""} diese Woche · ✕ zum Löschen`),
     React.createElement("input",{ref:fileInputRef,type:"file",accept:"image/*",capture:"environment",style:{display:"none"},onChange:handleFileUpload})
   );
 }
@@ -1449,25 +1642,13 @@ function MotivationSection({player,onUpdate}){
 
 /* ===== DETAILANSICHT ===== */
 function PlayerDetail({player,onBack,onUpdate,onDelete}){
-  const [selMetric,setSelMetric]=useState(METRICS[0].id);
   const [editInfo,setEditInfo]=useState(false);
   const [form,setForm]=useState({...player});
-  const [meMetric,setMeMetric]=useState(METRICS[0].id);
-  const [meMonth,setMeMonth]=useState(CURRENT_MONTH);
-  const [meValue,setMeValue]=useState("");
   const [saving,setSaving]=useState(false);
   const [deleting,setDeleting]=useState(false);
   const [confirmDelete,setConfirmDelete]=useState(false);
   const [prToast,setPrToast]=useState(null);
   const trainingWeek=calcTrainingWeek(player.plan_start_date);
-  const metric=METRICS.find(m=>m.id===selMetric);
-
-  const chartData=useMemo(()=>{
-    const series=player.data[selMetric]||[],byMonth={};
-    series.forEach(s=>{byMonth[s.month]=s.value;});
-    return MONTHS.filter(m=>byMonth[m.key]!=null).map(m=>({label:m.label,value:byMonth[m.key]}));
-  },[player,selMetric]);
-
   async function saveInfoFn(){
     if(IS_PREVIEW)return;setSaving(true);
     try{const u={...player,...form,age:Number(form.age),weight:Number(form.weight)||null,height:Number(form.height)||null,plan_start_date:form.plan_start_date||null};await savePlayer(u);onUpdate(u);setEditInfo(false);}
@@ -1479,28 +1660,7 @@ function PlayerDetail({player,onBack,onUpdate,onDelete}){
     try{await deletePlayerFromDB(player.id);onDelete(player.id);}
     catch(e){alert("Fehler: "+e.message);setDeleting(false);}
   }
-  async function addMeasurement(){
-    if(IS_PREVIEW||meValue===""||isNaN(Number(meValue)))return;
-    setSaving(true);
-    try{
-      const val=Number(meValue);
-      await saveMeasurement(player.id,meMetric,meMonth,val);
-      const series=[...(player.data[meMetric]||[])];
-      const idx=series.findIndex(s=>s.month===meMonth);
-      if(idx>=0)series[idx]={month:meMonth,value:val};else series.push({month:meMonth,value:val});
-      series.sort((a,b)=>a.month.localeCompare(b.month));
-      const newPBs={...player.personalBests};
-      if(checkAndUpdatePB(player,meMetric,val,meMonth)){
-        await savePersonalBest(player.id,meMetric,val,meMonth);
-        newPBs[meMetric]={value:val,month:meMonth};
-        const m=METRICS.find(x=>x.id===meMetric);
-        setPrToast(`🏆 Neuer PB: ${m.name} ${val}${m.unit}!`);
-      }
-      onUpdate({...player,data:{...player.data,[meMetric]:series},personalBests:newPBs});
-      setMeValue("");setSelMetric(meMetric);
-    }catch(e){alert("Fehler: "+e.message);}
-    setSaving(false);
-  }
+
   function editField(k,label,type="text",opts=null){
     return React.createElement("div",{key:k},
       React.createElement("label",{style:{fontSize:12,opacity:0.7}},label),
@@ -1558,37 +1718,8 @@ function PlayerDetail({player,onBack,onUpdate,onDelete}){
     React.createElement(AttendanceCalendar,{player,onUpdate}),
 
     React.createElement(Card,{style:{marginBottom:14}},
-      React.createElement(SectionTitle,null,"Entwicklungsübersicht"),
-      React.createElement("div",{style:{marginBottom:16,paddingBottom:16,borderBottom:`1px solid ${C.cardBorder}`}},
-        React.createElement("p",{style:{fontSize:12,opacity:0.6,margin:"0 0 10px"}},"Gesamtentwicklung · erster bis letzter Eintrag"),
-        React.createElement(DevSummary,{player})
-      ),
-      React.createElement("div",{style:{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}},
-        METRICS.map(m=>React.createElement(Btn,{key:m.id,onClick:()=>setSelMetric(m.id),style:{background:selMetric===m.id?C.accent:"transparent",color:selMetric===m.id?"#060c27":C.text,border:`1px solid ${selMetric===m.id?C.accent:C.cardBorder}`,borderRadius:20,padding:"6px 12px",fontSize:13,fontWeight:600}},m.name))
-      ),
-      React.createElement("div",{style:{minHeight:120,marginLeft:-10}},
-        chartData.length>0
-          ?React.createElement(ResponsiveContainer,{width:"100%",height:220},
-              React.createElement(LineChart,{data:chartData,margin:{top:10,right:10,bottom:0,left:0}},
-                React.createElement(CartesianGrid,{stroke:"rgba(255,255,255,0.08)"}),
-                React.createElement(XAxis,{dataKey:"label",stroke:"rgba(255,255,255,0.6)",tick:{fontSize:12}}),
-                React.createElement(YAxis,{stroke:"rgba(255,255,255,0.6)",tick:{fontSize:12},width:38,domain:["auto","auto"]}),
-                React.createElement(Tooltip,{contentStyle:{background:"#060c27",border:`1px solid ${C.accent}`,borderRadius:10,color:"#fff"},formatter:v=>[`${v} ${metric.unit}`,metric.name]}),
-                React.createElement(Line,{type:"monotone",dataKey:"value",stroke:C.accent,strokeWidth:3,dot:{r:4,fill:C.accent},activeDot:{r:6}})
-              )
-            )
-          :React.createElement("div",{style:{height:220,display:"flex",alignItems:"center",justifyContent:"center",opacity:0.4,fontSize:13}},"Noch keine Daten für diese Metrik")
-      ),
-      React.createElement("p",{style:{textAlign:"center",fontSize:12,opacity:0.6,margin:"6px 0 0"}},`${metric.name} in ${metric.unit}${metric.higherBetter===true?" · höher = besser":metric.higherBetter===false?" · niedriger = besser":""}`),
-      React.createElement("div",{style:{marginTop:16,paddingTop:16,borderTop:`1px solid ${C.cardBorder}`}},
-        React.createElement("p",{style:{fontSize:13,fontWeight:600,margin:"0 0 8px",color:C.accent}},"Neuen Wert eintragen"),
-        React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}},
-          React.createElement("select",{value:meMetric,onChange:e=>setMeMetric(e.target.value),style:fieldStyle},METRICS.map(m=>React.createElement("option",{key:m.id,value:m.id},m.name))),
-          React.createElement("select",{value:meMonth,onChange:e=>setMeMonth(e.target.value),style:fieldStyle},MONTHS.map(m=>React.createElement("option",{key:m.key,value:m.key},m.full))),
-          React.createElement("input",{type:"number",placeholder:"Wert",value:meValue,onChange:e=>setMeValue(e.target.value),style:fieldStyle}),
-          React.createElement(Btn,{onClick:addMeasurement,disabled:saving,style:{background:C.accent,color:"#060c27",borderRadius:10,fontWeight:700,fontSize:15}},saving?"…":"Speichern")
-        )
-      )
+      React.createElement(SectionTitle,{sub:"Antippen zum Aufklappen"},"Entwicklungsübersicht"),
+      React.createElement(DevSummary,{player,onUpdate})
     ),
 
     React.createElement(MotivationSection,{player,onUpdate}),

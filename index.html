@@ -857,6 +857,165 @@ function QuickNoteModal({player,onClose,onSaved}){
   );
 }
 
+/* ===== SCHNELL-MOTIVATION POPUP (Long-Press) ===== */
+function QuickMotivationModal({player,onClose,onSaved,onPhotoSaved}){
+  const [saving,setSaving]=useState(null);
+  const [uploading,setUploading]=useState(false);
+  const [photoTaken,setPhotoTaken]=useState(false);
+  const fileInputRef=useRef(null);
+  const week=CURRENT_WEEK;
+  const weekObj=WEEKS.find(w=>w.key===week);
+  const photoMonth=CURRENT_MONTH;
+
+  async function setMot(key){
+    setSaving(key);
+    try{
+      await saveMotivation(player.id,week,key);
+      onSaved(player.id,week,key);
+    }catch(e){alert("Fehler: "+e.message);}
+    setSaving(null);
+  }
+
+  async function handlePhoto(e){
+    const file=e.target.files[0];if(!file)return;
+    setUploading(true);
+    try{
+      const url=await savePhoto(player.id,photoMonth,file);
+      onPhotoSaved(player.id,photoMonth,url);
+      setPhotoTaken(true);
+    }catch(e){alert("Foto-Upload fehlgeschlagen: "+e.message);}
+    setUploading(false);
+    e.target.value="";
+  }
+
+  const current=player.motivation[week];
+  return React.createElement("div",{style:{position:"fixed",inset:0,background:"rgba(6,12,39,0.92)",zIndex:9990,display:"flex",alignItems:"flex-end",padding:16},onClick:onClose},
+    React.createElement("div",{style:{width:"100%",maxWidth:480,margin:"0 auto",background:"#0a1535",border:`1px solid ${C.cardBorder}`,borderRadius:"20px 20px 16px 16px",padding:20},onClick:e=>e.stopPropagation()},
+      // Header
+      React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}},
+        React.createElement("div",null,
+          React.createElement("div",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:20,fontWeight:700}},player.name),
+          React.createElement("div",{style:{fontSize:12,opacity:0.6}},weekObj?weekObj.full:"aktuelle Woche")
+        ),
+        React.createElement("button",{onClick:onClose,style:{background:"none",border:"none",color:"rgba(255,255,255,0.5)",fontSize:22,cursor:"pointer",lineHeight:1}},"✕")
+      ),
+      // Motivation
+      React.createElement("p",{style:{fontSize:12,opacity:0.6,margin:"0 0 10px",textTransform:"uppercase",letterSpacing:0.5}},"Motivation diese Woche"),
+      React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}},
+        MOT_ORDER.map(key=>{
+          const active=current===key;
+          const isSaving=saving===key;
+          return React.createElement(Btn,{key,onClick:()=>setMot(key),disabled:!!saving,style:{display:"flex",alignItems:"center",gap:8,background:active?MOT[key].color:"rgba(255,255,255,0.05)",border:`2px solid ${active?MOT[key].color:C.cardBorder}`,borderRadius:12,padding:"11px 12px",color:C.text,fontSize:13,fontWeight:700,opacity:isSaving?0.6:1}},
+            React.createElement("span",{style:{width:14,height:14,borderRadius:"50%",background:MOT[key].color,flexShrink:0,boxShadow:`0 0 6px ${MOT[key].color}`}}),
+            isSaving?"…":MOT[key].label
+          );
+        })
+      ),
+      // Divider
+      React.createElement("div",{style:{borderTop:`1px solid ${C.cardBorder}`,marginBottom:14}}),
+      // Photo button
+      React.createElement("p",{style:{fontSize:12,opacity:0.6,margin:"0 0 10px",textTransform:"uppercase",letterSpacing:0.5}},"Foto diesen Monat"),
+      React.createElement(Btn,{
+        onClick:()=>fileInputRef.current&&fileInputRef.current.click(),
+        disabled:uploading,
+        style:{width:"100%",background:photoTaken?"rgba(34,197,94,0.15)":"rgba(72,207,253,0.1)",color:photoTaken?"#22c55e":C.accent,border:`1px solid ${photoTaken?"#22c55e":C.cardBorder}`,borderRadius:12,padding:"12px",fontSize:14,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:10}
+      },
+        React.createElement("span",{style:{fontSize:18}},photoTaken?"✓":"📷"),
+        uploading?"Wird hochgeladen…":photoTaken?"Foto gespeichert":"Foto aufnehmen / hochladen"
+      ),
+      React.createElement("input",{ref:fileInputRef,type:"file",accept:"image/*",capture:"environment",style:{display:"none"},onChange:handlePhoto})
+    )
+  );
+}
+
+/* ===== MOTIVATIONSRUNDE (alle Spieler auf einem Bildschirm) ===== */
+function MotivationRound({players,onPlayersUpdated,onClose}){
+  const [week,setWeek]=useState(CURRENT_WEEK);
+  const [saving,setSaving]=useState(null); // pid being saved
+  const [done,setDone]=useState(false);
+  const weekObj=WEEKS.find(w=>w.key===week);
+
+  // local state: pid -> motKey
+  const [motState,setMotState]=useState(()=>{
+    const s={};
+    players.forEach(p=>{s[p.id]=p.motivation[CURRENT_WEEK]||null;});
+    return s;
+  });
+
+  // Re-init when week changes
+  useEffect(()=>{
+    const s={};
+    players.forEach(p=>{s[p.id]=p.motivation[week]||null;});
+    setMotState(s);
+  },[week,players]);
+
+  async function setMot(pid,key){
+    setSaving(pid);
+    try{
+      await saveMotivation(pid,week,key);
+      setMotState(prev=>({...prev,[pid]:key}));
+      const p=players.find(x=>x.id===pid);
+      onPlayersUpdated([{...p,motivation:{...p.motivation,[week]:key}}]);
+    }catch(e){alert("Fehler: "+e.message);}
+    setSaving(null);
+  }
+
+  const filled=Object.values(motState).filter(Boolean).length;
+  const total=players.length;
+
+  return React.createElement("div",null,
+    React.createElement("button",{onClick:onClose,style:{background:"none",border:"none",color:C.accent,fontSize:15,cursor:"pointer",padding:0,marginBottom:16,fontFamily:"inherit"}},"‹ Zurück"),
+    React.createElement(Card,{style:{marginBottom:12}},
+      React.createElement(SectionTitle,{sub:weekObj?weekObj.full:""},"🟢 Motivationsrunde"),
+      React.createElement("div",{style:{marginBottom:12}},
+        React.createElement("select",{value:week,onChange:e=>setWeek(e.target.value),style:{...fieldStyle,colorScheme:"dark"}},
+          WEEKS.map(w=>React.createElement("option",{key:w.key,value:w.key},w.full))
+        )
+      ),
+      // Progress bar
+      React.createElement("div",{style:{marginBottom:16}},
+        React.createElement("div",{style:{display:"flex",justifyContent:"space-between",fontSize:12,opacity:0.6,marginBottom:6}},
+          React.createElement("span",null,`${filled} von ${total} erfasst`),
+          filled===total&&React.createElement("span",{style:{color:"#22c55e",fontWeight:700}},"✓ Vollständig")
+        ),
+        React.createElement("div",{style:{height:4,background:"rgba(255,255,255,0.1)",borderRadius:2}},
+          React.createElement("div",{style:{width:`${(filled/total)*100}%`,height:"100%",background:C.accent,borderRadius:2,transition:"width 0.3s"}})
+        )
+      ),
+      // Player list with inline mot buttons
+      React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:10}},
+        players.map(p=>{
+          const cur=motState[p.id];
+          const isSaving=saving===p.id;
+          return React.createElement("div",{key:p.id,style:{background:"rgba(255,255,255,0.03)",border:`1px solid ${cur?MOT[cur].color:C.cardBorder}`,borderRadius:14,padding:"10px 12px",transition:"border-color 0.2s"}},
+            // Name row
+            React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:8}},
+              React.createElement("div",{style:{width:32,height:32,borderRadius:"50%",background:"rgba(72,207,253,0.15)",border:`1px solid ${C.accent}`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Saira Condensed',sans-serif",fontWeight:700,fontSize:13,color:C.accent,flexShrink:0}},
+                p.name.split(" ").filter(Boolean).map(n=>n[0]).join("")
+              ),
+              React.createElement("div",{style:{flex:1}},
+                React.createElement("div",{style:{fontWeight:600,fontSize:14}},p.name),
+                React.createElement("div",{style:{fontSize:11,opacity:0.55}},p.position||"—")
+              ),
+              cur&&React.createElement("span",{style:{fontSize:12,fontWeight:700,color:MOT[cur].color}},MOT[cur].label)
+            ),
+            // 4 mot buttons compact
+            React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6}},
+              MOT_ORDER.map(key=>
+                React.createElement(Btn,{key,onClick:()=>!isSaving&&setMot(p.id,key),style:{background:cur===key?MOT[key].color:"rgba(255,255,255,0.05)",border:`1px solid ${cur===key?MOT[key].color:"rgba(255,255,255,0.1)"}`,borderRadius:10,padding:"8px 4px",display:"flex",flexDirection:"column",alignItems:"center",gap:4,opacity:isSaving?0.5:1}},
+                  React.createElement("span",{style:{width:12,height:12,borderRadius:"50%",background:MOT[key].color,display:"block"}}),
+                  React.createElement("span",{style:{fontSize:9,opacity:cur===key?1:0.6,color:cur===key?"#fff":C.text,fontWeight:cur===key?700:400,lineHeight:1.2,textAlign:"center"}},MOT[key].label)
+                )
+              )
+            )
+          );
+        })
+      )
+    ),
+    React.createElement(Btn,{onClick:onClose,style:{width:"100%",background:filled===total?C.accent:"rgba(255,255,255,0.1)",color:filled===total?"#060c27":C.text,borderRadius:12,padding:"14px",fontWeight:700,fontSize:16}},filled===total?"✓ Fertig":`Fertig (${filled}/${total})`)
+  );
+}
+
 /* ===== SPIELERLISTE ===== */
 const EMPTY_FORM={name:"",position:"",email:"",age:"",plan:"",weight:"",height:"",plan_start_date:""};
 
@@ -868,7 +1027,9 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
   const [saving,setSaving]=useState(false);
   const [err,setErr]=useState("");
   const [quickNotePlayer,setQuickNotePlayer]=useState(null);
+  const [quickMotPlayer,setQuickMotPlayer]=useState(null);
   const [longPressTimer,setLongPressTimer]=useState(null);
+  const [longPressPhase,setLongPressPhase]=useState(null); // "note"|"mot"
   const [prToast,setPrToast]=useState(null);
 
   const filtered=players.filter(p=>p.name.toLowerCase().includes(q.toLowerCase())||(p.position||"").toLowerCase().includes(q.toLowerCase()));
@@ -892,15 +1053,16 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
     );
   }
 
-  // Long-press for quick note
+  // Long-press: 600ms -> quick motivation, 1200ms -> quick note
   function handlePressStart(p){
-    const t=setTimeout(()=>{setQuickNotePlayer(p);},600);
-    setLongPressTimer(t);
+    const t1=setTimeout(()=>{setQuickMotPlayer(p);},600);
+    setLongPressTimer(t1);
   }
   function handlePressEnd(){if(longPressTimer){clearTimeout(longPressTimer);setLongPressTimer(null);}}
 
   if(view==="combine") return React.createElement(CombineView,{players,combines,onClose:()=>setView("list"),onPlayersUpdated,onCombineCreated});
   if(view==="attendance") return React.createElement(AttendanceView,{players,onPlayersUpdated,onClose:()=>setView("list")});
+  if(view==="motivation") return React.createElement(MotivationRound,{players,onPlayersUpdated,onClose:()=>setView("list")});
 
   return React.createElement("div",null,
     /* Header */
@@ -913,7 +1075,7 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
     ),
 
     /* Action-Buttons */
-    React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}},
+    React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}},
       React.createElement(Btn,{onClick:()=>setView("combine"),style:{background:"rgba(72,207,253,0.12)",color:C.accent,border:`1px solid ${C.cardBorder}`,borderRadius:14,padding:"14px 10px",fontWeight:700,fontSize:13,textAlign:"center"}},
         React.createElement("div",{style:{fontSize:22,marginBottom:4}},"⚡"),
         React.createElement("div",null,"Combine / Messung"),
@@ -922,7 +1084,14 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
       React.createElement(Btn,{onClick:()=>setView("attendance"),style:{background:"rgba(72,207,253,0.12)",color:C.accent,border:`1px solid ${C.cardBorder}`,borderRadius:14,padding:"14px 10px",fontWeight:700,fontSize:13,textAlign:"center"}},
         React.createElement("div",{style:{fontSize:22,marginBottom:4}},"📋"),
         React.createElement("div",null,"Anwesenheit"),
-        React.createElement("div",{style:{fontSize:11,opacity:0.6,marginTop:2,fontWeight:400}},"Diese Woche erfassen")
+        React.createElement("div",{style:{fontSize:11,opacity:0.6,marginTop:2,fontWeight:400}},"Tageserfassung")
+      )
+    ),
+    React.createElement(Btn,{onClick:()=>setView("motivation"),style:{width:"100%",marginBottom:16,background:"rgba(34,197,94,0.12)",color:"#22c55e",border:"1px solid rgba(34,197,94,0.4)",borderRadius:14,padding:"12px 10px",fontWeight:700,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",gap:12}},
+      React.createElement("div",{style:{fontSize:20}},"🟢"),
+      React.createElement("div",{style:{textAlign:"left"}},
+        React.createElement("div",null,"Motivationsrunde"),
+        React.createElement("div",{style:{fontSize:11,opacity:0.7,fontWeight:400,marginTop:1}},"Alle Spieler auf einmal erfassen")
       )
     ),
 
@@ -956,7 +1125,7 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
     ),
 
     React.createElement("input",{placeholder:"Suche nach Name oder Position…",value:q,onChange:e=>setQ(e.target.value),style:{...fieldStyle,marginBottom:12}}),
-    React.createElement("p",{style:{fontSize:11,opacity:0.4,margin:"0 0 10px",textAlign:"center"}},"Lang gedrückt halten für Schnellnotiz 🎙"),
+    React.createElement("p",{style:{fontSize:11,opacity:0.4,margin:"0 0 10px",textAlign:"center"}},"Lang drücken: 🟢 Schnell-Motivation · 🎙 Notiz per Sprache"),
 
     players.length===0
       ?React.createElement("div",{style:{textAlign:"center",opacity:0.5,padding:"40px 0",fontSize:14}},"Noch keine Spieler.")
@@ -997,6 +1166,19 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
       onSaved:(pid,week,text)=>{
         onPlayersUpdated([{...players.find(p=>p.id===pid),notes:{...players.find(p=>p.id===pid).notes,[week]:text}}]);
         setQuickNotePlayer(null);
+      }
+    }),
+    quickMotPlayer&&React.createElement(QuickMotivationModal,{
+      player:quickMotPlayer,
+      onClose:()=>setQuickMotPlayer(null),
+      onSaved:(pid,week,key)=>{
+        const p=players.find(x=>x.id===pid);
+        onPlayersUpdated([{...p,motivation:{...p.motivation,[week]:key}}]);
+        setQuickMotPlayer(null);
+      },
+      onPhotoSaved:(pid,month,url)=>{
+        const p=players.find(x=>x.id===pid);
+        onPlayersUpdated([{...p,photos:{...(p.photos||{}),[month]:url}}]);
       }
     }),
     prToast&&React.createElement(Toast,{msg:prToast,onDone:()=>setPrToast(null)})
@@ -1413,7 +1595,7 @@ function Login(){
   }
   return React.createElement("div",{style:{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg,padding:"20px"}},
     React.createElement("div",{style:{width:"100%",maxWidth:"380px",background:C.cardBg,border:"1px solid "+C.cardBorder,borderRadius:"16px",padding:"30px"}},
-      React.createElement("h1",{style:{color:C.text,fontSize:"22px",margin:"0 0 6px",fontWeight:800}},"EHM Athletik-Tracker"),
+      React.createElement("h1",{style:{color:C.text,fontSize:"28px",margin:"0 0 6px",fontWeight:700,fontFamily:"'Saira Condensed',sans-serif",letterSpacing:1}},"EHM Athletik-Tracker"),
       React.createElement("p",{style:{color:"rgba(255,255,255,0.7)",fontSize:"14px",margin:"0 0 20px"}},"Bitte mit deinem Vereins-Zugang einloggen."),
       React.createElement("input",{type:"email",placeholder:"E-Mail",value:email,autoComplete:"username",onChange:e=>setEmail(e.target.value),style:inp}),
       React.createElement("input",{type:"password",placeholder:"Passwort",autoComplete:"current-password",onChange:e=>{pw.current=e.target.value;},onKeyDown:e=>{if(e.key==="Enter")submit();},style:inp}),

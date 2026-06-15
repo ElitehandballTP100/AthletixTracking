@@ -1658,6 +1658,9 @@ function PlayerDetail({player,onBack,onUpdate,onDelete}){
   const [confirmDelete,setConfirmDelete]=useState(false);
   const [prToast,setPrToast]=useState(null);
   const trainingWeek=calcTrainingWeek(player.plan_start_date);
+
+  // Always scroll to top when opening a player profile
+  useEffect(()=>{ window.scrollTo({top:0,behavior:"instant"}); },[player.id]);
   async function saveInfoFn(){
     if(IS_PREVIEW)return;setSaving(true);
     try{const u={...player,...form,age:Number(form.age),weight:Number(form.weight)||null,height:Number(form.height)||null,plan_start_date:form.plan_start_date||null};await savePlayer(u);onUpdate(u);setEditInfo(false);}
@@ -1809,11 +1812,20 @@ function AppWithTour(){
 
   if(loading) return React.createElement("div",{style:{padding:40,textAlign:"center",opacity:0.6,fontFamily:"'Saira',sans-serif"}},"Daten werden geladen…");
 
-  const appContent=React.createElement("div",{style:{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:"'Saira',sans-serif",padding:"20px 16px 60px"}},
+  // During tour: only show Max Mustermann
+  const [isTourActive,setIsTourActive]=useState(false);
+  useEffect(()=>{
+    function onTourState(e){setIsTourActive(e.detail.active);}
+    window.addEventListener("tour_state",onTourState);
+    return()=>window.removeEventListener("tour_state",onTourState);
+  },[]);
+  const visiblePlayers=isTourActive?players.filter(p=>p.email==="demo@tour.test"):players;
+
+  const appContent=React.createElement("div",{style:{background:C.bg,minHeight:"100vh",color:C.text,fontFamily:"'Saira',sans-serif",padding:isTourActive?"210px 16px 60px":"20px 16px 60px",transition:"padding 0.2s"}},
     React.createElement("div",{style:{maxWidth:480,margin:"0 auto"}},
       selected
         ?React.createElement(PlayerDetail,{player:selected,onBack:()=>{setSelectedId(null);if(window.fireTourEvent)window.fireTourEvent("went_back");},onUpdate:updatePlayer,onDelete:removePlayer})
-        :React.createElement(PlayerList,{players,combines,onSelect:setSelectedId,onAdd:addPlayer,onPlayersUpdated:updatePlayers,onCombineCreated:addCombine})
+        :React.createElement(PlayerList,{players:visiblePlayers,combines,onSelect:setSelectedId,onAdd:addPlayer,onPlayersUpdated:updatePlayers,onCombineCreated:addCombine})
     )
   );
 
@@ -1842,30 +1854,60 @@ const TOUR_STEPS=[
 ];
 
 function TourOverlay({step,onNext,onSkip}){
+  const [collapsed,setCollapsed]=useState(false);
   const stepNum=TOUR_STEPS.findIndex(s=>s.id===step.id);
   const isFirst=stepNum===0;
   const isLast=step.id==="done";
   const isWaiting=!isFirst&&!isLast&&step.trigger!==null;
   const progress=Math.round((stepNum/(TOUR_STEPS.length-1))*100);
-  return React.createElement("div",{style:{position:"fixed",bottom:0,left:0,right:0,zIndex:10000,padding:"0 12px 16px",pointerEvents:"none"}},
-    React.createElement("div",{style:{maxWidth:480,margin:"0 auto",background:"linear-gradient(135deg,#0a1535,#0d2040)",border:"2px solid "+C.accent,borderRadius:20,padding:18,boxShadow:"0 -4px 40px rgba(72,207,253,0.35)",pointerEvents:"all"}},
-      React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:12}},
+
+  // Auto-expand when step changes
+  useEffect(()=>setCollapsed(false),[step.id]);
+
+  // Collapsed pill — sits top-right, out of the way
+  if(collapsed) return React.createElement("div",{
+    style:{position:"fixed",top:52,right:12,zIndex:10000,background:"linear-gradient(135deg,#0a1535,#0d2040)",border:"2px solid "+C.accent,borderRadius:50,padding:"8px 14px",boxShadow:"0 4px 20px rgba(72,207,253,0.4)",cursor:"pointer",display:"flex",alignItems:"center",gap:8,pointerEvents:"all"},
+    onClick:()=>setCollapsed(false)
+  },
+    React.createElement("span",{style:{fontSize:16}},step.emoji),
+    React.createElement("span",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:13,fontWeight:700,color:C.accent}},"Tour"),
+    React.createElement("span",{style:{fontSize:11,opacity:0.6,color:C.text}},stepNum+"/"+(TOUR_STEPS.length-1)),
+    React.createElement("span",{style:{fontSize:12,color:C.accent}},isWaiting?"⏳":"▼")
+  );
+
+  // Full overlay — at TOP so it doesn't cover content below
+  return React.createElement("div",{style:{position:"fixed",top:0,left:0,right:0,zIndex:10000,padding:"10px 12px 0",pointerEvents:"none"}},
+    React.createElement("div",{style:{maxWidth:480,margin:"0 auto",background:"linear-gradient(135deg,#0a1535,#0d2040)",border:"2px solid "+C.accent,borderRadius:"0 0 20px 20px",padding:16,boxShadow:"0 4px 30px rgba(72,207,253,0.3)",pointerEvents:"all"}},
+
+      // Top row: progress + step + collapse + skip
+      React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:10}},
         React.createElement("div",{style:{flex:1,height:3,background:"rgba(255,255,255,0.1)",borderRadius:2}},
           React.createElement("div",{style:{width:progress+"%",height:"100%",background:C.accent,borderRadius:2,transition:"width 0.4s"}})
         ),
         React.createElement("span",{style:{fontSize:11,opacity:0.5,flexShrink:0}},stepNum+"/"+(TOUR_STEPS.length-1)),
-        React.createElement("button",{onClick:onSkip,style:{background:"none",border:"none",color:"rgba(255,255,255,0.35)",fontSize:11,cursor:"pointer",padding:"2px 4px",fontFamily:"inherit"}},"Überspringen")
+        // Collapse button — most important for usability
+        isWaiting&&React.createElement("button",{
+          onClick:()=>setCollapsed(true),
+          style:{background:C.accent,border:"none",borderRadius:20,color:"#060c27",fontSize:11,fontWeight:800,cursor:"pointer",padding:"4px 10px",fontFamily:"inherit",flexShrink:0}
+        },"Minimieren ↑"),
+        React.createElement("button",{onClick:onSkip,style:{background:"none",border:"none",color:"rgba(255,255,255,0.3)",fontSize:11,cursor:"pointer",padding:"2px 4px",fontFamily:"inherit"}},"✕")
       ),
-      React.createElement("div",{style:{display:"flex",gap:12,alignItems:"flex-start",marginBottom:step.hint?10:12}},
-        React.createElement("span",{style:{fontSize:26,lineHeight:1,flexShrink:0,marginTop:2}},step.emoji),
+
+      // Content
+      React.createElement("div",{style:{display:"flex",gap:10,alignItems:"flex-start",marginBottom:step.hint?8:10}},
+        React.createElement("span",{style:{fontSize:22,lineHeight:1,flexShrink:0}},step.emoji),
         React.createElement("div",null,
-          React.createElement("div",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:18,fontWeight:700,color:C.accent,marginBottom:5}},step.title),
-          React.createElement("p",{style:{fontSize:13,opacity:0.85,margin:0,lineHeight:1.55}},step.text)
+          React.createElement("div",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:17,fontWeight:700,color:C.accent,marginBottom:4}},step.title),
+          React.createElement("p",{style:{fontSize:12,opacity:0.85,margin:0,lineHeight:1.5}},step.text)
         )
       ),
-      step.hint&&React.createElement("div",{style:{background:"rgba(72,207,253,0.1)",border:"1px solid rgba(72,207,253,0.25)",borderRadius:10,padding:"8px 12px",marginBottom:12,fontSize:12,color:C.accent,lineHeight:1.4}},"👆 "+step.hint),
-      (isFirst||isLast||!isWaiting)&&React.createElement(Btn,{onClick:onNext,style:{width:"100%",background:isLast?"#22c55e":C.accent,color:"#060c27",borderRadius:12,padding:"12px",fontWeight:800,fontSize:15}},isFirst?"Tour starten →":isLast?"✓ Fertig — Demo-Spieler löschen":"Weiter →"),
-      isWaiting&&React.createElement("div",{style:{textAlign:"center",fontSize:12,opacity:0.45,padding:"6px 0"}},"⏳ Warte auf deine Aktion oben…")
+
+      step.hint&&React.createElement("div",{style:{background:"rgba(72,207,253,0.1)",border:"1px solid rgba(72,207,253,0.2)",borderRadius:8,padding:"7px 10px",marginBottom:10,fontSize:11,color:C.accent,lineHeight:1.4}},"👆 "+step.hint),
+
+      (isFirst||isLast||!isWaiting)&&React.createElement(Btn,{onClick:onNext,style:{width:"100%",background:isLast?"#22c55e":C.accent,color:"#060c27",borderRadius:10,padding:"11px",fontWeight:800,fontSize:14}},
+        isFirst?"Tour starten →":isLast?"✓ Fertig — Demo-Spieler löschen":"Weiter →"
+      ),
+      isWaiting&&React.createElement("div",{style:{textAlign:"center",fontSize:11,opacity:0.4,padding:"4px 0"}},"⏳ Führe die Aufgabe oben durch — Tour springt automatisch weiter")
     )
   );
 }
@@ -1901,6 +1943,7 @@ function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSele
   async function startTour(){
     const ex=players.find(p=>p.email==="demo@tour.test");
     if(ex){await deletePlayerFromDB(ex.id).catch(()=>{});onRemovePlayer(ex.id);}
+    window.dispatchEvent(new CustomEvent('tour_state',{detail:{active:true}}));
     setTourActive(true);setStepId("welcome");
     try{
       const demo=await addPlayerToDB({name:"Max Mustermann",position:"Rückraum Mitte",email:"demo@tour.test",age:24,plan:"TP100 Trainingsplan",plan_start_date:todayKey(),weight:"",height:""});
@@ -1916,6 +1959,7 @@ function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSele
     if(step.id==="done"){
       const d=getDemo();if(d){await deletePlayerFromDB(d.id).catch(()=>{});onRemovePlayer(d.id);}
       try{localStorage.setItem(TOUR_KEY,"1");}catch(_){}
+      window.dispatchEvent(new CustomEvent('tour_state',{detail:{active:false}}));
       setTourActive(false);setShowStartBtn(false);setDemoPlayer(null);return;
     }
     if(!step.trigger){advance();return;}
@@ -1924,6 +1968,7 @@ function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSele
   async function skipTour(){
     const d=getDemo();if(d){await deletePlayerFromDB(d.id).catch(()=>{});onRemovePlayer(d.id);}
     try{localStorage.setItem(TOUR_KEY,"1");}catch(_){}
+    window.dispatchEvent(new CustomEvent('tour_state',{detail:{active:false}}));
     setTourActive(false);setShowStartBtn(false);
   }
 

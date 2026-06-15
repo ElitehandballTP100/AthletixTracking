@@ -141,13 +141,19 @@ async function loadPlayers(){
 async function loadCombines(){
   try{const {data}=await sb.from('combines').select('*').order('combine_date',{ascending:false});return data||[];}catch(_){return [];}
 }
+async function getUid(){
+  const {data}=await sb.auth.getSession();
+  return data.session?.user?.id||null;
+}
 async function saveCombineToDB(label,date){
-  const {data,error}=await sb.from('combines').insert({label,combine_date:date}).select().single();
+  const uid=await getUid();
+  const {data,error}=await sb.from('combines').insert({label,combine_date:date,owner_id:uid}).select().single();
   if(error)throw error;
   return data;
 }
 async function savePlayer(player){
-  const {error}=await sb.from('players').upsert({id:player.id,name:player.name,position:player.position,email:player.email,age:Number(player.age),plan:player.plan,weight:player.weight?Number(player.weight):null,height:player.height?Number(player.height):null,plan_start_date:player.plan_start_date||null});
+  const uid=await getUid();
+  const {error}=await sb.from('players').upsert({id:player.id,name:player.name,position:player.position,email:player.email,age:Number(player.age),plan:player.plan,weight:player.weight?Number(player.weight):null,height:player.height?Number(player.height):null,plan_start_date:player.plan_start_date||null,owner_id:uid});
   if(error)throw error;
 }
 async function deletePlayerFromDB(pid){
@@ -169,25 +175,29 @@ function calcTrainingWeek(startDate){
   return Math.floor(diff/(7*24*60*60*1000))+1;
 }
 async function saveMeasurement(playerId,metricId,month,value){
-  const {error}=await sb.from('measurements').upsert({player_id:playerId,metric_id:metricId,month,value},{onConflict:'player_id,metric_id,month'});
+  const uid=await getUid();
+  const {error}=await sb.from('measurements').upsert({player_id:playerId,metric_id:metricId,month,value,owner_id:uid},{onConflict:'player_id,metric_id,month'});
   if(error)throw error;
 }
 async function savePersonalBest(playerId,metricId,value,month){
-  const {error}=await sb.from('personal_bests').upsert({player_id:playerId,metric_id:metricId,value,achieved_month:month},{onConflict:'player_id,metric_id'});
+  const uid=await getUid();
+  const {error}=await sb.from('personal_bests').upsert({player_id:playerId,metric_id:metricId,value,achieved_month:month,owner_id:uid},{onConflict:'player_id,metric_id'});
   if(error)throw error;
 }
 async function saveMotivation(playerId,weekKey,value){
-  const {error}=await sb.from('motivation').upsert({player_id:playerId,week:weekKey,month:weekKey,value},{onConflict:'player_id,month'});
+  const uid=await getUid();
+  const {error}=await sb.from('motivation').upsert({player_id:playerId,week:weekKey,month:weekKey,value,owner_id:uid},{onConflict:'player_id,month'});
   if(error)throw error;
 }
 async function saveNote(playerId,weekKey,text){
-  const {error}=await sb.from('notes').upsert({player_id:playerId,week:weekKey,month:weekKey,text},{onConflict:'player_id,month'});
+  const uid=await getUid();
+  const {error}=await sb.from('notes').upsert({player_id:playerId,week:weekKey,month:weekKey,text,owner_id:uid},{onConflict:'player_id,month'});
   if(error)throw error;
 }
 async function saveAttendance(playerId,dayKey,present){
-  // dayKey is YYYY-MM-DD
+  const uid=await getUid();
   const {error}=await sb.from('attendance').upsert(
-    {player_id:playerId,day:dayKey,week:dayKey.slice(0,7),present},
+    {player_id:playerId,day:dayKey,week:dayKey.slice(0,7),present,owner_id:uid},
     {onConflict:'player_id,day'}
   );
   if(error)throw error;
@@ -204,7 +214,8 @@ async function savePhoto(playerId,monthKey,file){
   return url;
 }
 async function addPlayerToDB(player){
-  const {data,error}=await sb.from('players').insert({name:player.name,position:player.position,email:player.email,age:Number(player.age)||null,plan:player.plan,weight:Number(player.weight)||null,height:Number(player.height)||null,plan_start_date:player.plan_start_date||null}).select().single();
+  const uid=await getUid();
+  const {data,error}=await sb.from('players').insert({name:player.name,position:player.position,email:player.email,age:Number(player.age)||null,plan:player.plan,weight:Number(player.weight)||null,height:Number(player.height)||null,plan_start_date:player.plan_start_date||null,owner_id:uid}).select().single();
   if(error)throw error;
   const emptyData={};
   METRICS.forEach(m=>{emptyData[m.id]=[];});

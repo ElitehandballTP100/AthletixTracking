@@ -286,7 +286,7 @@ function Toast({msg,onDone}){
 function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated}){
   // Step 0 = choose/create combine, Step 1 = select players, Step 2 = rapid entry
   const [step,setStep]=useState(0);
-  const [combineLabel,setCombineLabel]=useState("");
+  const [combineLabel,setCombineLabel]=useState(window._tourActive?"Testmessung":"");
   const [combineDate,setCombineDate]=useState(new Date().toISOString().slice(0,10));
   const [combineType,setCombineType]=useState("combine"); // "combine" | "monatlich" | "3monatlich"
   const [selectedPlayers,setSelectedPlayers]=useState([]);
@@ -368,16 +368,17 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
     if(step===2)setTimeout(()=>inputRef.current&&inputRef.current.focus(),80);
   },[currentMetricIdx,currentPlayerIdx,step]);
 
+  // Tour: auto-fill demo values — defined at component scope so saved screen can use it
+  const isTourCombine=activePlayers.length===1&&activePlayers[0]?.email==="demo@tour.test";
+  const demoDefaults={squat:"100",bench:"80",sprint:"4.5",cmj:"38",plank:"90",weight:"82"};
+  function effectiveVal(pid,mid){
+    const v=getVal(pid,mid);
+    return v!==""?v:(isTourCombine?(demoDefaults[mid]||"50"):"");
+  }
+
   async function handleSaveAll(){
     setSaving(true);
     try{
-      // Tour: auto-fill demo values for Max if only partial values entered
-      const isTour=activePlayers.length===1&&activePlayers[0]?.email==="demo@tour.test";
-      const demoDefaults={squat:"100",bench:"80",sprint:"4.5",cmj:"38",plank:"90",weight:"82"};
-      function effectiveVal(pid,mid){
-        const v=getVal(pid,mid);
-        return v!==""?v:(isTour?(demoDefaults[mid]||"50"):"");
-      }
       if(combineLabel.trim()){
         await saveCombineToDB(combineLabel.trim(),combineDate);
       }
@@ -1920,11 +1921,11 @@ const TOUR_STEPS=[
   // pos:"bottom" → banner unten,   Inhalt darüber frei
   {id:"welcome",           pos:"bottom", emoji:"🚀", title:"Willkommen im Athletik-Tracker!",             text:"Diese Tour führt dich durch den echten Ablauf — genau so wie du ihn mit deiner Mannschaft durchführst. Du übst alles an einem Demo-Spieler (Max Mustermann), der am Ende automatisch gelöscht wird.", hint:null,                                                                                              trigger:null},
   {id:"player_created",    pos:"bottom", emoji:"👤", title:"Schritt 1: Spieler anlegen",                   text:"Max Mustermann wurde angelegt. Tippe jetzt auf ihn in der Liste — sein Profil öffnet sich.",                                                                                                            hint:"Tippe auf 'Max Mustermann' in der Liste ↓",                                                           trigger:null},
-  {id:"combine_first",     pos:"bottom", emoji:"⚡", title:"Schritt 2: Ersterfassung (Combine)",            text:"Geh zurück zur Liste und tippe auf ⚡ Combine. Wähle 'Combine Ersterfassung', dann Max, trage einen Wert ein — der Rest wird automatisch befüllt.",                                                    hint:"‹ Zurück → ⚡ Combine → Ersterfassung → Max → Wert → Speichern ↓",                                     trigger:"combine_done"},
-  {id:"attendance",        pos:"bottom", emoji:"📋", title:"Schritt 3: Anwesenheit erfassen",               text:"Tippe auf 📋 Anwesenheit, wähle heute, markiere Max als anwesend und speichere.",                                                                                                                       hint:"📋 Anwesenheit → Max ✓ → Speichern ↓",                                                                trigger:"attendance_saved"},
+  {id:"combine_first",     pos:"top", emoji:"⚡", title:"Schritt 2: Ersterfassung (Combine)",            text:"Geh zurück zur Liste und tippe auf ⚡ Combine. Wähle 'Combine Ersterfassung', dann Max, trage einen Wert ein — der Rest wird automatisch befüllt.",                                                    hint:"‹ Zurück → ⚡ Combine → Ersterfassung → Max → Wert → Speichern ↓",                                     trigger:"combine_done"},
+  {id:"attendance",        pos:"top", emoji:"📋", title:"Schritt 3: Anwesenheit erfassen",               text:"Tippe auf 📋 Anwesenheit, wähle heute, markiere Max als anwesend und speichere.",                                                                                                                       hint:"📋 Anwesenheit → Max ✓ → Speichern ↓",                                                                trigger:"attendance_saved"},
   {id:"long_press_motivation",pos:"top", emoji:"🟢", title:"Schritt 4: Live-Motivation per Lang-Druck",     text:"Halte den Namen 'Max Mustermann' lang gedrückt (~1 Sek.). Im Popup das sich öffnet eine Motivationsfarbe antippen.",                                                                                    hint:"↓ Lang drücken auf Max → Farbe antippen",                                                             trigger:"motivation_set"},
   {id:"long_press_note",   pos:"top",    emoji:"🎙", title:"Schritt 5: Sprachnotiz per Lang-Druck",         text:"Nochmal lang drücken auf Max. Im Popup 🎙 Sprechen antippen, einen kurzen Satz sprechen, stoppen und speichern.",                                                                                       hint:"↓ Lang drücken → 🎙 Sprechen → ⏹ Stop → Speichern",                                                  trigger:"note_saved"},
-  {id:"followup_combine",  pos:"bottom", emoji:"📊", title:"Schritt 6: Folgemessung",                       text:"Tippe auf ⚡ Combine → Folgemessung → Max → einen anderen Wert eintragen → Speichern. So entsteht der Entwicklungsgraph.",                                                                             hint:"⚡ Combine → Folgemessung → Max → Wert → Speichern ↓",                                                trigger:"combine_done"},
+  {id:"followup_combine",  pos:"top", emoji:"📊", title:"Schritt 6: Folgemessung",                       text:"Tippe auf ⚡ Combine → Folgemessung → Max → einen anderen Wert eintragen → Speichern. So entsteht der Entwicklungsgraph.",                                                                             hint:"⚡ Combine → Folgemessung → Max → Wert → Speichern ↓",                                                trigger:"combine_done"},
   {id:"see_graph",         pos:"top",    emoji:"📈", title:"Schritt 7: Entwicklungsgraph ablesen",           text:"Öffne Max' Profil, scrolle zur Entwicklungsübersicht und tippe auf eine Übung — der Graph klappt auf.",                                                                                                hint:"↓ Max öffnen → Entwicklungsübersicht → Übung antippen",                                               trigger:"graph_opened"},
   {id:"motivation_round",  pos:"bottom", emoji:"🟢", title:"Schritt 8: Motivationsrunde für alle",          text:"Tippe auf 🟢 Motivationsrunde — alle Spieler auf einem Bildschirm, eine Farbe pro Spieler. 30 Sekunden nach dem Training.",                                                                           hint:"🟢 Motivationsrunde → Farbe für Max antippen ↓",                                                      trigger:"motivation_round_opened"},
   {id:"done",              pos:"bottom", emoji:"🎉", title:"Du kennst den echten Ablauf!",                   text:"Einmalig Combine → Jede Einheit: Anwesenheit + Motivation + Notizen → Monatlich: Folgemessung → Graph zeigt Entwicklung. Max wird jetzt gelöscht.",                                                  hint:null,                                                                                                  trigger:null}
@@ -2018,8 +2019,22 @@ function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSele
   function getDemo(){return players.find(p=>p.email==="demo@tour.test")||demoPlayer;}
 
   async function startTour(){
-    const ex=players.find(p=>p.email==="demo@tour.test");
-    if(ex){await deletePlayerFromDB(ex.id).catch(()=>{});onRemovePlayer(ex.id);}
+    // Delete ALL existing demo players (handles duplicates from repeated tour starts)
+    const allDemos=players.filter(p=>p.email==="demo@tour.test");
+    for(const ex of allDemos){
+      await deletePlayerFromDB(ex.id).catch(()=>{});
+      onRemovePlayer(ex.id);
+    }
+    // Also check DB directly for any orphaned demos
+    try{
+      const {data:orphans}=await sb.from('players').select('id').eq('email','demo@tour.test');
+      if(orphans&&orphans.length>0){
+        for(const o of orphans){
+          await deletePlayerFromDB(o.id).catch(()=>{});
+        }
+      }
+    }catch(_){}
+    window._tourActive=true;
     window._tourStepPos="bottom";
     window.dispatchEvent(new CustomEvent('tour_state',{detail:{active:true}}));
     setTourActive(true);setStepId("welcome");
@@ -2044,8 +2059,11 @@ function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSele
   }
 
   async function skipTour(){
-    const d=getDemo();if(d){await deletePlayerFromDB(d.id).catch(()=>{});onRemovePlayer(d.id);}
+    // Delete all demo players
+    const allDemos=players.filter(p=>p.email==="demo@tour.test");
+    for(const ex of allDemos){await deletePlayerFromDB(ex.id).catch(()=>{});onRemovePlayer(ex.id);}
     try{localStorage.setItem(TOUR_KEY,"1");}catch(_){}
+    window._tourActive=false;
     window.dispatchEvent(new CustomEvent('tour_state',{detail:{active:false}}));
     setTourActive(false);setShowStartBtn(false);
   }

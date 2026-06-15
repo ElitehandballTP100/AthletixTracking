@@ -302,11 +302,17 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
   const month=combineDate.slice(0,7);
 
   // Init values for selected players
+  const DEMO_PREFILL={squat:"",bench:"80",sprint:"4.5",cmj:"38",plank:"90",weight:"82"};
+
   function initValues(pids){
     const v={};
+    // Tour: only Max → pre-fill all except Kniebeuge (squat) so trainer just enters one value
+    const isTourDemo=pids.length===1&&players.find(p=>p.id===pids[0]&&p.email==="demo@tour.test");
     pids.forEach(pid=>{
       v[pid]={};
-      METRICS.forEach(m=>{v[pid][m.id]="";});
+      METRICS.forEach(m=>{
+        v[pid][m.id]=isTourDemo?(DEMO_PREFILL[m.id]||""):"";
+      });
     });
     setValues(v);
   }
@@ -1921,76 +1927,105 @@ function AppWithTour(){
 
 /* ===== ONBOARDING TOUR ===== */
 const TOUR_STEPS=[
-  // pos:"top"    → banner oben,    Inhalt darunter frei
-  // pos:"bottom" → banner unten,   Inhalt darüber frei
-  {id:"welcome",           pos:"bottom", emoji:"🚀", title:"Willkommen im Athletik-Tracker!",             text:"Diese Tour führt dich durch den echten Ablauf — genau so wie du ihn mit deiner Mannschaft durchführst. Du übst alles an einem Demo-Spieler (Max Mustermann), der am Ende automatisch gelöscht wird.", hint:null,                                                                                              trigger:null},
-  {id:"player_created",    pos:"bottom", emoji:"👤", title:"Schritt 1: Spieler anlegen",                   text:"Max Mustermann wurde angelegt. Tippe jetzt auf ihn in der Liste — sein Profil öffnet sich.",                                                                                                            hint:"Tippe auf 'Max Mustermann' in der Liste ↓",                                                           trigger:null},
-  {id:"combine_first",     pos:"top", emoji:"⚡", title:"Schritt 2: Ersterfassung (Combine)",            text:"Geh zurück zur Liste und tippe auf ⚡ Combine. Wähle 'Combine Ersterfassung', dann Max, trage einen Wert ein — der Rest wird automatisch befüllt.",                                                    hint:"‹ Zurück → ⚡ Combine → Ersterfassung → Max → Wert → Speichern ↓",                                     trigger:"combine_done"},
-  {id:"attendance",        pos:"top", emoji:"📋", title:"Schritt 3: Anwesenheit erfassen",               text:"Tippe auf 📋 Anwesenheit, wähle heute, markiere Max als anwesend und speichere.",                                                                                                                       hint:"📋 Anwesenheit → Max ✓ → Speichern ↓",                                                                trigger:"attendance_saved"},
-  {id:"long_press_motivation",pos:"top", emoji:"🟢", title:"Schritt 4: Live-Motivation per Lang-Druck",     text:"Halte den Namen 'Max Mustermann' lang gedrückt (~1 Sek.). Im Popup das sich öffnet eine Motivationsfarbe antippen.",                                                                                    hint:"↓ Lang drücken auf Max → Farbe antippen",                                                             trigger:"motivation_set"},
-  {id:"long_press_note",   pos:"top",    emoji:"🎙", title:"Schritt 5: Sprachnotiz per Lang-Druck",         text:"Nochmal lang drücken auf Max. Im Popup 🎙 Sprechen antippen, einen kurzen Satz sprechen, stoppen und speichern.",                                                                                       hint:"↓ Lang drücken → 🎙 Sprechen → ⏹ Stop → Speichern",                                                  trigger:"note_saved"},
-  {id:"followup_combine",  pos:"top", emoji:"📊", title:"Schritt 6: Folgemessung",                       text:"Tippe auf ⚡ Combine → Folgemessung → Max → einen anderen Wert eintragen → Speichern. So entsteht der Entwicklungsgraph.",                                                                             hint:"⚡ Combine → Folgemessung → Max → Wert → Speichern ↓",                                                trigger:"combine_done"},
-  {id:"see_graph",         pos:"top",    emoji:"📈", title:"Schritt 7: Entwicklungsgraph ablesen",           text:"Öffne Max' Profil, scrolle zur Entwicklungsübersicht und tippe auf eine Übung — der Graph klappt auf.",                                                                                                hint:"↓ Max öffnen → Entwicklungsübersicht → Übung antippen",                                               trigger:"graph_opened"},
-  {id:"motivation_round",  pos:"bottom", emoji:"🟢", title:"Schritt 8: Motivationsrunde für alle",          text:"Tippe auf 🟢 Motivationsrunde — alle Spieler auf einem Bildschirm, eine Farbe pro Spieler. 30 Sekunden nach dem Training.",                                                                           hint:"🟢 Motivationsrunde → Farbe für Max antippen ↓",                                                      trigger:"motivation_round_opened"},
-  {id:"done",              pos:"bottom", emoji:"🎉", title:"Du kennst den echten Ablauf!",                   text:"Einmalig Combine → Jede Einheit: Anwesenheit + Motivation + Notizen → Monatlich: Folgemessung → Graph zeigt Entwicklung. Max wird jetzt gelöscht.",                                                  hint:null,                                                                                                  trigger:null}
+  {id:"welcome",           pos:"bottom", emoji:"🚀", title:"Willkommen!",                          text:"Diese Tour führt dich durch den echten Ablauf mit einem Demo-Spieler (Max Mustermann). Er wird am Ende gelöscht.",                                         steps:null,                                                                          trigger:null},
+  {id:"player_created",    pos:"bottom", emoji:"👤", title:"Schritt 1: Spieler anlegen",            text:"Max Mustermann wurde angelegt. Tippe jetzt auf ihn in der Liste.",                                                                                          steps:["Tippe auf Max Mustermann"],                                                  trigger:null},
+  {id:"combine_first",     pos:"top",    emoji:"⚡", title:"Schritt 2: Ersterfassung",              text:"Erfasse einmalig alle Startwerte — die Baseline für den Entwicklungsgraph.",                                                                                 steps:["‹ Zurück","⚡ Combine","Ersterfassung wählen","Max auswählen","Kniebeugen-Wert eintragen","Speichern"], trigger:"combine_done"},
+  {id:"attendance",        pos:"top",    emoji:"📋", title:"Schritt 3: Anwesenheit",                text:"Als erstes bei jeder Einheit: Anwesenheit abhaken.",                                                                                                         steps:["📋 Anwesenheit","Datum wählen","Max ✓ antippen","Speichern"],                trigger:"attendance_saved"},
+  {id:"long_press_motivation",pos:"bottom",emoji:"🟢",title:"Schritt 4: Live-Motivation",          text:"Während du observierst: Lang auf Max drücken → Motivationsfarbe antippen.",                                                                                   steps:["Lang drücken auf Max (~1 Sek.)","Motivationsfarbe antippen"],                trigger:"motivation_set"},
+  {id:"long_press_note",   pos:"bottom", emoji:"🎙", title:"Schritt 5: Sprachnotiz",               text:"Fällt dir etwas auf? Lang auf Max drücken → sprechen → speichern.",                                                                                          steps:["Lang drücken auf Max","🎙 Sprechen antippen","Satz sprechen","⏹ Stop → Speichern"], trigger:"note_saved"},
+  {id:"followup_combine",  pos:"top",    emoji:"📊", title:"Schritt 6: Folgemessung",              text:"Monatlich/quartalsweise neue Werte eintragen — dann entsteht der Graph.",                                                                                     steps:["‹ Zurück","⚡ Combine","Folgemessung wählen","Max auswählen","Anderen Wert eintragen","Speichern"], trigger:"combine_done"},
+  {id:"see_graph",         pos:"bottom", emoji:"📈", title:"Schritt 7: Entwicklungsgraph",         text:"Im Spielerprofil: Übung antippen → Graph klappt auf.",                                                                                                        steps:["Max Profil öffnen","Zur Entwicklungsübersicht scrollen","Übung antippen"],   trigger:"graph_opened"},
+  {id:"motivation_round",  pos:"top",    emoji:"🟢", title:"Schritt 8: Motivationsrunde",          text:"Nach dem Training: alle Spieler auf einmal in 30 Sekunden.",                                                                                                  steps:["🟢 Motivationsrunde antippen","Farbe für Max auswählen"],                    trigger:"motivation_round_opened"},
+  {id:"done",              pos:"bottom", emoji:"🎉", title:"Fertig!",                              text:"Einmalig Combine → Jede Einheit: Anwesenheit + Motivation + Notizen → Monatlich: Folgemessung → Graph zeigt Entwicklung. Max wird jetzt gelöscht.",            steps:null,                                                                          trigger:null}
 ];
 
+
 function TourOverlay({step,onNext,onSkip,inDetail}){
+  const [doneSteps,setDoneSteps]=useState(0);
   const stepNum=TOUR_STEPS.findIndex(s=>s.id===step.id);
   const isFirst=stepNum===0;
   const isLast=step.id==="done";
   const isWaiting=!isFirst&&!isLast&&step.trigger!==null;
   const progress=Math.round((stepNum/(TOUR_STEPS.length-1))*100);
-  // Dynamic positioning:
-  // In detail view → always bottom (buttons/inputs are at top of profile)
-  // In list view   → use step.pos (top = banner above list, bottom = banner below list)
-  // Special: steps that need buttons at bottom of list → top
-  // steps that need interaction at top of profile → bottom
+
+  // Reset sub-steps when step changes
+  useEffect(()=>setDoneSteps(0),[step.id]);
+
+  // Advance sub-steps automatically when tour progresses
+  useEffect(()=>{
+    if(step.steps&&doneSteps<step.steps.length){
+      // don't auto-advance — user sees them light up as they do each action
+    }
+  },[doneSteps,step]);
+
+  // Dynamic position: in detail view always bottom; else use step.pos
   const pos=inDetail?"bottom":(step.pos||"bottom");
   const isTop=pos==="top";
 
-  // Wrapper: fixed top or bottom, no pointer-events on wrapper itself
   const wrapStyle=isTop
     ?{position:"fixed",top:0,left:0,right:0,zIndex:10000,padding:"0 12px",pointerEvents:"none"}
     :{position:"fixed",bottom:0,left:0,right:0,zIndex:10000,padding:"0 12px 12px",pointerEvents:"none"};
+  const cardRadius=isTop?"0 0 18px 18px":"18px 18px 0 0";
+  const cardShadow=isTop?"0 4px 24px rgba(72,207,253,0.25)":"0 -4px 24px rgba(72,207,253,0.25)";
 
-  // Card rounded corners: top→bottom-rounded, bottom→top-rounded
-  const cardRadius=isTop?"0 0 20px 20px":"20px 20px 0 0";
-  const cardShadow=isTop?"0 4px 30px rgba(72,207,253,0.3)":"0 -4px 30px rgba(72,207,253,0.3)";
+  return React.createElement("div",{style:wrapStyle},
+    React.createElement("div",{style:{maxWidth:480,margin:"0 auto",background:"linear-gradient(135deg,#071228,#0c1e3a)",border:"2px solid "+C.accent,borderRadius:cardRadius,padding:14,boxShadow:cardShadow,pointerEvents:"all"}},
 
-  const cardInner=React.createElement("div",{style:{maxWidth:480,margin:"0 auto",background:"linear-gradient(135deg,#0a1535,#0d2040)",border:"2px solid "+C.accent,borderRadius:cardRadius,padding:16,boxShadow:cardShadow,pointerEvents:"all"}},
-
-    // Progress row
-    React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:10}},
-      React.createElement("div",{style:{flex:1,height:3,background:"rgba(255,255,255,0.1)",borderRadius:2}},
-        React.createElement("div",{style:{width:progress+"%",height:"100%",background:C.accent,borderRadius:2,transition:"width 0.5s"}})
+      // Progress bar + step count + close
+      React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:10}},
+        React.createElement("div",{style:{flex:1,height:3,background:"rgba(255,255,255,0.1)",borderRadius:2}},
+          React.createElement("div",{style:{width:progress+"%",height:"100%",background:C.accent,borderRadius:2,transition:"width 0.5s"}})
+        ),
+        React.createElement("span",{style:{fontSize:11,opacity:0.45,flexShrink:0}},stepNum+"/"+(TOUR_STEPS.length-1)),
+        React.createElement("button",{onClick:onSkip,style:{background:"none",border:"none",color:"rgba(255,255,255,0.3)",fontSize:14,cursor:"pointer",padding:"1px 5px",fontFamily:"inherit",lineHeight:1}},"✕")
       ),
-      React.createElement("span",{style:{fontSize:11,opacity:0.5,flexShrink:0}},stepNum+"/"+(TOUR_STEPS.length-1)),
-      React.createElement("button",{onClick:onSkip,style:{background:"none",border:"none",color:"rgba(255,255,255,0.3)",fontSize:13,cursor:"pointer",padding:"2px 6px",fontFamily:"inherit",lineHeight:1}},"✕")
-    ),
 
-    // Emoji + text
-    React.createElement("div",{style:{display:"flex",gap:10,alignItems:"flex-start",marginBottom:step.hint?8:10}},
-      React.createElement("span",{style:{fontSize:22,lineHeight:1,flexShrink:0}},step.emoji),
-      React.createElement("div",null,
-        React.createElement("div",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:17,fontWeight:700,color:C.accent,marginBottom:4}},step.title),
-        React.createElement("p",{style:{fontSize:12,opacity:0.85,margin:0,lineHeight:1.5}},step.text)
-      )
-    ),
-
-    // Hint
-    step.hint&&React.createElement("div",{style:{background:"rgba(72,207,253,0.1)",border:"1px solid rgba(72,207,253,0.2)",borderRadius:8,padding:"7px 10px",marginBottom:10,fontSize:11,color:C.accent,lineHeight:1.4}},step.hint),
-
-    // Button or waiting indicator
-    (isFirst||isLast||!isWaiting)
-      ?React.createElement(Btn,{onClick:onNext,style:{width:"100%",background:isLast?"#22c55e":C.accent,color:"#060c27",borderRadius:10,padding:"11px",fontWeight:800,fontSize:14}},
-          isFirst?"Tour starten →":isLast?"✓ Fertig — Demo-Spieler löschen":"Weiter →"
+      // Emoji + title + text (compact)
+      React.createElement("div",{style:{display:"flex",gap:10,alignItems:"flex-start",marginBottom:step.steps?10:10}},
+        React.createElement("span",{style:{fontSize:20,lineHeight:1,flexShrink:0,marginTop:2}},step.emoji),
+        React.createElement("div",null,
+          React.createElement("div",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:16,fontWeight:700,color:C.accent,marginBottom:3}},step.title),
+          React.createElement("p",{style:{fontSize:12,opacity:0.8,margin:0,lineHeight:1.4}},step.text)
         )
-      :React.createElement("div",{style:{textAlign:"center",fontSize:11,opacity:0.4,padding:"4px 0"}},"⏳ Führe die Aufgabe durch — Tour springt automatisch weiter")
-  );
+      ),
 
-  return React.createElement("div",{style:wrapStyle},cardInner);
+      // Step-by-step sub-steps as glowing buttons
+      step.steps&&React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}},
+        step.steps.map((s,i)=>{
+          const done=i<doneSteps;
+          const active=i===doneSteps;
+          return React.createElement("button",{
+            key:i,
+            onClick:()=>{if(active)setDoneSteps(n=>n+1);},
+            style:{
+              background:done?"rgba(72,207,253,0.18)":active?"rgba(72,207,253,0.1)":"rgba(255,255,255,0.04)",
+              color:done?C.accent:active?C.accent:"rgba(255,255,255,0.35)",
+              border:"1px solid "+(done||active?C.accent:"rgba(255,255,255,0.1)"),
+              borderRadius:20,padding:"5px 11px",fontSize:11,fontWeight:done||active?700:400,
+              cursor:active?"pointer":"default",
+              fontFamily:"inherit",
+              boxShadow:active?"0 0 8px rgba(72,207,253,0.35)":"none",
+              display:"flex",alignItems:"center",gap:5,
+              transition:"all 0.2s"
+            }
+          },
+            done&&React.createElement("span",{style:{fontSize:10}},"✓"),
+            s,
+            active&&React.createElement("span",{style:{fontSize:10,opacity:0.7}},i===step.steps.length-1?"":"→")
+          );
+        })
+      ),
+
+      // Action button or waiting
+      (isFirst||isLast||!isWaiting)
+        ?React.createElement(Btn,{onClick:onNext,style:{width:"100%",background:isLast?"#22c55e":C.accent,color:"#060c27",borderRadius:10,padding:"10px",fontWeight:800,fontSize:14}},
+            isFirst?"Tour starten →":isLast?"✓ Fertig — Demo-Spieler löschen":"Weiter →"
+          )
+        :React.createElement("div",{style:{textAlign:"center",fontSize:11,opacity:0.35,padding:"3px 0"}},"⏳ Führe die markierten Schritte durch — Tour springt automatisch weiter")
+    )
+  );
 }
+
 
 function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSelectPlayer,selectedId,inDetail,children}){
   const TOUR_KEY="athletik_tour_v2";

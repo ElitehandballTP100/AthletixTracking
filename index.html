@@ -329,10 +329,11 @@ function Toast({msg,onDone}){
    ===================================================== */
 function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated,onCombineUpdated,initialCombine}){
   // Step 0 = choose/create combine, Step 1 = select players, Step 2 = rapid entry
-  const [step,setStep]=useState(0);
-  const [combineLabel,setCombineLabel]=useState(window._tourActive?"Testmessung":"");
-  const [combineDate,setCombineDate]=useState(new Date().toISOString().slice(0,10));
-  const [combineType,setCombineType]=useState("combine"); // "combine" | "monatlich" | "3monatlich"
+  const [step,setStep]=useState(initialCombine?1:0);
+  const [combineLabel,setCombineLabel]=useState(initialCombine?initialCombine.label:(window._tourActive?"Testmessung":""));
+  const [combineDate,setCombineDate]=useState(initialCombine?initialCombine.combine_date:new Date().toISOString().slice(0,10));
+  const [combineType,setCombineType]=useState(initialCombine?"folgemessung":"combine");
+  const [activeCombine,setActiveCombine]=useState(initialCombine||null);
   const [selectedPlayers,setSelectedPlayers]=useState([]);
   const [values,setValues]=useState({});// {playerId: {metricId: value}}
   const [saving,setSaving]=useState(false);
@@ -472,7 +473,9 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
         const newMeasured=[...new Set([...(combineEntry.measuredPlayerIds||[]),...selectedPlayers])];
         const allDone=newMeasured.length>=players.length;
         await updateCombineStatus(combineEntry.id,allDone?'done':'open',newMeasured.length,players.length);
-        if(onCombineUpdated)onCombineUpdated({...combineEntry,measuredPlayerIds:newMeasured,measured_players:newMeasured.length,status:allDone?'done':'open'});
+        const updatedEntry={...combineEntry,measuredPlayerIds:newMeasured,measured_players:newMeasured.length,status:allDone?'done':'open'};
+      setActiveCombine(updatedEntry);
+      if(onCombineUpdated)onCombineUpdated(updatedEntry);
       }
 
       setSaved(true);

@@ -1339,6 +1339,11 @@ const EMPTY_FORM={name:"",position:"",email:"",age:"",plan:"",weight:"",height:"
 function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineCreated,onRemoveCombine,onReopenCombine,onCombineUpdated,activeCombineForView}){
   const [q,setQ]=useState("");
   const [view,setView]=useState("list");// "list"|"combine"|"attendance"
+
+  // Auto-open combine view when parent signals a reopen
+  useEffect(()=>{
+    if(activeCombineForView){setView("combine");}
+  },[activeCombineForView]);
   const [showForm,setShowForm]=useState(false);
   const [form,setForm]=useState(EMPTY_FORM);
   const [saving,setSaving]=useState(false);
@@ -1421,7 +1426,7 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
     pressStartRef.current=null;
   }
 
-  if(view==="combine"){if(window.fireTourEvent)window.fireTourEvent('combine_opened');return React.createElement(CombineView,{players,combines,onClose:()=>setView("list"),onPlayersUpdated,onCombineCreated,onCombineUpdated:onCombineUpdated,initialCombine:activeCombineForView});}
+  if(view==="combine"){if(window.fireTourEvent)window.fireTourEvent('combine_opened');return React.createElement(CombineView,{players,combines,onClose:()=>{setView("list");if(onReopenCombine)onReopenCombine(null);},onPlayersUpdated,onCombineCreated,onCombineUpdated:onCombineUpdated,initialCombine:activeCombineForView});}
   if(view==="attendance"){if(window.fireTourEvent)window.fireTourEvent('attendance_opened');return React.createElement(AttendanceView,{players,onPlayersUpdated,onClose:()=>setView("list")});}
   if(view==="motivation"){if(window.fireTourEvent)window.fireTourEvent("motivation_round_opened");return React.createElement(MotivationRound,{players,onPlayersUpdated,onClose:()=>setView("list")});}
   if(view==="weightround") return React.createElement(WeightRound,{players,onPlayersUpdated,onClose:()=>setView("list")});
@@ -2155,7 +2160,7 @@ function AppWithTour(){
     React.createElement("div",{style:{maxWidth:480,margin:"0 auto"}},
       selected
         ?React.createElement(PlayerDetail,{player:selected,onBack:()=>{setSelectedId(null);if(window.fireTourEvent)window.fireTourEvent("went_back");},onUpdate:updatePlayer,onDelete:removePlayer})
-        :React.createElement(PlayerList,{players:visiblePlayers,combines,onSelect:(id)=>{setSelectedId(id);if(window.fireTourEvent)window.fireTourEvent('player_opened');},onAdd:addPlayer,onPlayersUpdated:updatePlayers,onCombineCreated:addCombine,onRemoveCombine:(id)=>setCombines(prev=>prev.filter(c=>c.id!==id)),onReopenCombine:(c)=>{setReopenCombine(c);setView('combine');},onCombineUpdated:(c)=>setCombines(prev=>prev.map(x=>x.id===c.id?c:x)),activeCombineForView:reopenCombine})
+        :React.createElement(PlayerList,{players:visiblePlayers,combines,onSelect:(id)=>{setSelectedId(id);if(window.fireTourEvent)window.fireTourEvent('player_opened');},onAdd:addPlayer,onPlayersUpdated:updatePlayers,onCombineCreated:addCombine,onRemoveCombine:(id)=>setCombines(prev=>prev.filter(c=>c.id!==id)),onReopenCombine:(c)=>{setReopenCombine(c);},onCombineUpdated:(c)=>setCombines(prev=>prev.map(x=>x.id===c.id?c:x)),activeCombineForView:reopenCombine})
     )
   );
 

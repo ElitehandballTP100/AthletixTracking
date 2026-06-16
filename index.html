@@ -15,6 +15,20 @@
   .pr-badge { display:inline-block; background: linear-gradient(135deg,#f59e0b,#ef4444); color:#fff; font-size:10px; font-weight:800; padding:2px 6px; border-radius:20px; margin-left:6px; vertical-align:middle; letter-spacing:0.5px; }
   .haptic { transition: transform 0.08s; } .haptic:active { transform: scale(0.94); }
   .player-row { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  @keyframes pulse-glow {
+    0%   { box-shadow: 0 0 0px rgba(72,207,253,0); border-color: rgba(72,207,253,0.25); }
+    50%  { box-shadow: 0 0 20px rgba(72,207,253,0.8); border-color: #48cffd; }
+    100% { box-shadow: 0 0 0px rgba(72,207,253,0); border-color: rgba(72,207,253,0.25); }
+  }
+  .tour-highlight-player {
+    animation: pulse-glow 1.2s ease-in-out infinite !important;
+    border-color: #48cffd !important;
+    background: rgba(72,207,253,0.12) !important;
+  }
+  /* Desktop: cap tour overlay width and center it */
+  @media (min-width: 600px) {
+    .tour-overlay-wrap { max-width: 520px !important; margin: 0 auto !important; left: 50% !important; transform: translateX(-50%) !important; right: auto !important; width: calc(100% - 32px) !important; }
+  }
 </style>
 </head>
 <body>
@@ -855,7 +869,7 @@ function QuickNoteModal({player,onClose,onSaved}){
       setText((base+final).trimStart()+(interim?" ["+interim+"]":""));
     };
     rec.onerror=e=>{setStatus("Fehler: "+e.error);setRecording(false);};
-    rec.onend=()=>{setText(t=>t.replace(/\s*\[.*?\]/g,"").trim());setRecording(false);setStatus("Fertig.");};
+    rec.onend=()=>{setText(t=>t.replace(/\s*\[.*?\]/g,"").trim());setRecording(false);setStatus("Fertig.");if(window.fireTourEvent)window.fireTourEvent("voice_ended");};
     rec.start();recRef.current=rec;setRecording(true);setStatus("🎙 Aufnahme läuft…");
   }
   function stopVoice(){if(recRef.current){recRef.current.stop();recRef.current=null;}setRecording(false);}
@@ -1172,6 +1186,18 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
   const [err,setErr]=useState("");
   const [quickNotePlayer,setQuickNotePlayer]=useState(null);
   const [quickMotPlayer,setQuickMotPlayer]=useState(null);
+  const [highlightTourPlayer,setHighlightTourPlayer]=useState(false);
+
+  // Listen for tour steps that need long-press — highlight Max
+  useEffect(()=>{
+    function onTourEvt(e){
+      const t=(e.detail||{}).type;
+      if(t==="tour_step_longpress") setHighlightTourPlayer(true);
+      if(t==="longpress_fired"||t==="tour_step_normal") setHighlightTourPlayer(false);
+    }
+    window.addEventListener("tour_event",onTourEvt);
+    return()=>window.removeEventListener("tour_event",onTourEvt);
+  },[]);
   const [longPressTimer,setLongPressTimer]=useState(null);
   const [longPressPhase,setLongPressPhase]=useState(null); // "note"|"mot"
   const [prToast,setPrToast]=useState(null);
@@ -1324,8 +1350,8 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
             onMouseUp:()=>handlePressEnd(p,null),
             onMouseLeave:()=>{if(longPressTimer){clearTimeout(longPressTimer);setLongPressTimer(null);}pressStartRef.current=null;},
             onContextMenu:e=>e.preventDefault(),
-            className:"player-row",
-            style:{display:"flex",alignItems:"center",gap:14,background:C.cardBg,border:`1px solid ${C.cardBorder}`,borderRadius:14,padding:"12px 14px",color:C.text,textAlign:"left",cursor:"pointer",fontFamily:"inherit",userSelect:"none",WebkitUserSelect:"none"}
+            className:"player-row"+(highlightTourPlayer&&p.email==="demo@tour.test"?" tour-highlight-player":""),
+            style:{display:"flex",alignItems:"center",gap:14,background:C.cardBg,border:`1px solid ${C.cardBorder}`,borderRadius:14,padding:"12px 14px",color:C.text,textAlign:"left",cursor:"pointer",fontFamily:"inherit",userSelect:"none",WebkitUserSelect:"none",transition:"all 0.2s"}
           },
             React.createElement("div",{style:{width:42,height:42,borderRadius:"50%",background:"rgba(72,207,253,0.15)",border:`1px solid ${C.accent}`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Saira Condensed',sans-serif",fontWeight:700,fontSize:17,color:C.accent,flexShrink:0}},
               p.name.split(" ").filter(Boolean).map(n=>n[0]).join("")
@@ -1988,8 +2014,8 @@ const TOUR_STEPS=[
 
   {id:"long_press_note",      pos:"top",   emoji:"🎙",title:"Schritt 5: Sprachnotiz",
    text:"Fällt dir etwas auf? Lang auf Max drücken → sprechen → speichern.",
-   steps:[{label:"Lang drücken auf Max",event:"longpress_fired"},{label:"🎙 Sprechen starten",event:"voice_started"},{label:"⏹ Stop → Speichern",event:"note_saved"}],
-   trigger:"note_saved"},
+   steps:[{label:"Lang drücken auf Max",event:"longpress_fired"},{label:"🎙 Sprechen starten",event:"voice_started"},{label:"⏹ Aufnahme stoppen",event:"voice_ended"}],
+   trigger:"voice_ended"},
 
   {id:"followup_combine",     pos:"top",emoji:"📊",title:"Schritt 6: Folgemessung",
    text:"Monatlich/quartalsweise neue Werte — dann entsteht der Graph.",
@@ -2046,7 +2072,7 @@ function TourOverlay({step,onNext,onMinimize,onAbort,inDetail,minimized,onExpand
     const pillStyle=isTop
       ?{position:"fixed",top:8,left:"50%",transform:"translateX(-50%)",zIndex:10000}
       :{position:"fixed",bottom:8,left:"50%",transform:"translateX(-50%)",zIndex:10000};
-    return React.createElement("div",{style:pillStyle},
+    return React.createElement("div",{className:wrapClass,style:pillStyle},
       React.createElement("button",{onClick:onExpand,style:{background:"linear-gradient(135deg,#0a1535,#0d2040)",border:"2px solid "+C.accent,borderRadius:50,padding:"8px 18px",display:"flex",alignItems:"center",gap:10,color:C.text,cursor:"pointer",fontFamily:"inherit",boxShadow:"0 4px 20px rgba(72,207,253,0.4)"}},
         React.createElement("span",{style:{fontSize:16}},step.emoji),
         React.createElement("span",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:13,fontWeight:700,color:C.accent}},"Tour: "+step.title),
@@ -2060,10 +2086,11 @@ function TourOverlay({step,onNext,onMinimize,onAbort,inDetail,minimized,onExpand
   const wrapStyle=isTop
     ?{position:"fixed",top:0,left:0,right:0,zIndex:10000,padding:"0 12px",pointerEvents:"none"}
     :{position:"fixed",bottom:0,left:0,right:0,zIndex:10000,padding:"0 12px 12px",pointerEvents:"none"};
+  const wrapClass="tour-overlay-wrap";
   const cardRadius=isTop?"0 0 18px 18px":"18px 18px 0 0";
   const cardShadow=isTop?"0 4px 24px rgba(72,207,253,0.25)":"0 -4px 24px rgba(72,207,253,0.25)";
 
-  return React.createElement("div",{style:wrapStyle},
+  return React.createElement("div",{className:wrapClass,style:wrapStyle},
     React.createElement("div",{style:{maxWidth:480,margin:"0 auto",background:"linear-gradient(135deg,#071228,#0c1e3a)",border:"2px solid "+C.accent,borderRadius:cardRadius,padding:14,boxShadow:cardShadow,pointerEvents:"all"}},
 
       // Header: progress + step + minimize + abort
@@ -2186,6 +2213,9 @@ function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSele
       window._tourStepPos=next.pos||"bottom";
       setStepId(next.id);
       setTourMinimized(false); // auto-expand when step advances
+      // Signal if this is a long-press step
+      const isLongPress=next.id==="long_press_motivation"||next.id==="long_press_note";
+      window.fireTourEvent(isLongPress?"tour_step_longpress":"tour_step_normal");
     }
   }
 
@@ -2195,7 +2225,7 @@ function TourManager({players,onPlayersUpdated,onAddPlayer,onRemovePlayer,onSele
       const type=(e.detail||{}).type;
       if(type==="longpress_fired") setTourMinimized(true);
       // Re-expand after popup closes (motivation_set or note_saved)
-      if(type==="motivation_set"||type==="note_saved") setTourMinimized(false);
+      if(type==="motivation_set"||type==="note_saved"||type==="voice_ended") setTourMinimized(false);
     }
     window.addEventListener("tour_event",onEvt);
     return()=>window.removeEventListener("tour_event",onEvt);

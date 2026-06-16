@@ -1333,12 +1333,178 @@ function WeightRound({players,onPlayersUpdated,onClose}){
   );
 }
 
+
+/* ===== TEAM BESTLEISTUNGEN ===== */
+function TeamBestleistungen({players,onClose}){
+  const [activeMetric,setActiveMetric]=useState("squat");
+
+  // For each metric: compute stats per player
+  function getPlayerStats(player, metricId){
+    const series=(player.data[metricId]||[]).filter(s=>s.value!=null).sort((a,b)=>a.month.localeCompare(b.month));
+    if(series.length<2)return null;
+    const first=series[0].value, last=series[series.length-1].value;
+    const diff=last-first;
+    const pct=first!==0?((diff/Math.abs(first))*100):0;
+    const m=METRICS.find(x=>x.id===metricId);
+    // For sprint: lower is better, so "best" diff is most negative
+    const improvementValue=m.higherBetter===false?-diff:diff;
+    const improvementPct=m.higherBetter===false?-pct:pct;
+    return{player,first,last,diff,pct,improvementValue,improvementPct,current:last,series};
+  }
+
+  function getRankings(metricId){
+    const m=METRICS.find(x=>x.id===metricId);
+    const stats=players.map(p=>getPlayerStats(p,metricId)).filter(Boolean);
+    if(!stats.length)return{byImprovement:[],byCurrent:[],byAbsolute:[]};
+
+    // Sort by improvement % (best first)
+    const byImprovement=[...stats].sort((a,b)=>b.improvementPct-a.improvementPct);
+    // Sort by current value (best first, accounting for direction)
+    const byCurrent=[...stats].sort((a,b)=>m.higherBetter===false?a.current-b.current:b.current-a.current);
+    // Sort by absolute improvement
+    const byAbsolute=[...stats].sort((a,b)=>b.improvementValue-a.improvementValue);
+    return{byImprovement,byCurrent,byAbsolute};
+  }
+
+  const currentMetric=METRICS.find(m=>m.id===activeMetric);
+  const rankings=getRankings(activeMetric);
+
+  function Medal({rank}){
+    const medals=["🥇","🥈","🥉"];
+    return React.createElement("span",{style:{fontSize:18,flexShrink:0}},medals[rank]||(rank+1)+".");
+  }
+
+  function RankCard({title,subtitle,items,valueKey,formatVal,color}){
+    if(!items.length)return React.createElement("div",{style:{opacity:0.4,fontSize:13,textAlign:"center",padding:"12px 0"}},"Keine Daten");
+    return React.createElement(Card,{style:{marginBottom:12}},
+      React.createElement("div",{style:{marginBottom:12}},
+        React.createElement("div",{style:{fontSize:14,fontWeight:700,color}}," "+title),
+        React.createElement("div",{style:{fontSize:11,opacity:0.55,marginTop:2}},subtitle)
+      ),
+      React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:8}},
+        items.slice(0,5).map((s,i)=>{
+          const val=typeof valueKey==="function"?valueKey(s):s[valueKey];
+          const barMax=Math.abs(items[0][typeof valueKey==="function"?"improvementValue":valueKey]||1);
+          const barW=Math.min(Math.abs(val)/barMax*100,100);
+          return React.createElement("div",{key:s.player.id,style:{display:"flex",alignItems:"center",gap:10}},
+            React.createElement(Medal,{rank:i}),
+            React.createElement("div",{style:{flex:1,minWidth:0}},
+              React.createElement("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:3}},
+                React.createElement("span",{style:{fontSize:13,fontWeight:i===0?700:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"60%"}},s.player.name),
+                React.createElement("span",{style:{fontSize:13,fontWeight:700,color:i===0?color:"rgba(255,255,255,0.7)"}},formatVal(s))
+              ),
+              React.createElement("div",{style:{height:4,background:"rgba(255,255,255,0.08)",borderRadius:2}},
+                React.createElement("div",{style:{width:barW+"%",height:"100%",background:i===0?color:"rgba(255,255,255,0.25)",borderRadius:2,transition:"width 0.4s"}})
+              )
+            )
+          );
+        })
+      )
+    );
+  }
+
+  // Overall "Gesamtsieger" across all metrics
+  function computeOverallRanking(){
+    const scores={};
+    players.forEach(p=>{scores[p.id]={player:p,points:0,medals:0};});
+    METRICS.forEach(m=>{
+      const r=getRankings(m.id);
+      r.byImprovement.slice(0,3).forEach((s,i)=>{
+        if(scores[s.player.id]){
+          scores[s.player.id].points+=(3-i);
+          if(i===0)scores[s.player.id].medals++;
+        }
+      });
+    });
+    return Object.values(scores).filter(x=>x.points>0).sort((a,b)=>b.points-a.points||b.medals-a.medals);
+  }
+
+  const overall=computeOverallRanking();
+
+  return React.createElement("div",null,
+    React.createElement("button",{onClick:onClose,style:{background:"none",border:"none",color:C.accent,fontSize:15,cursor:"pointer",padding:0,marginBottom:16,fontFamily:"inherit"}},"‹ Zurück"),
+
+    React.createElement("div",{style:{marginBottom:18}},
+      React.createElement("h1",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:28,fontWeight:700,margin:0,letterSpacing:0.5}},"🏆 Team Bestleistungen"),
+      React.createElement("p",{style:{margin:"2px 0 0",opacity:0.6,fontSize:13}},players.length+" Athleten im Vergleich")
+    ),
+
+    // Gesamtranking
+    overall.length>0&&React.createElement(Card,{style:{marginBottom:16,background:"linear-gradient(135deg,rgba(245,158,11,0.12),rgba(6,12,39,0.8))",border:"1px solid rgba(245,158,11,0.4)"}},
+      React.createElement("div",{style:{fontSize:14,fontWeight:700,color:"#f59e0b",marginBottom:12}},"🏆 Gesamtranking · Beste Entwicklung"),
+      React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:8}},
+        overall.slice(0,5).map((x,i)=>
+          React.createElement("div",{key:x.player.id,style:{display:"flex",alignItems:"center",gap:12,background:"rgba(255,255,255,0.04)",borderRadius:10,padding:"10px 12px"}},
+            React.createElement("span",{style:{fontSize:20}},["🥇","🥈","🥉"][i]||(i+1)+"."),
+            React.createElement("div",{style:{flex:1}},
+              React.createElement("div",{style:{fontWeight:i===0?700:500,fontSize:14}},x.player.name),
+              React.createElement("div",{style:{fontSize:11,opacity:0.55}},x.player.position||"—")
+            ),
+            React.createElement("div",{style:{textAlign:"right"}},
+              React.createElement("div",{style:{fontWeight:700,color:"#f59e0b",fontSize:14}},x.points+" Punkte"),
+              x.medals>0&&React.createElement("div",{style:{fontSize:10,opacity:0.6}},x.medals+"× 🥇")
+            )
+          )
+        )
+      )
+    ),
+
+    // Metric selector
+    React.createElement("div",{style:{marginBottom:14}},
+      React.createElement("p",{style:{fontSize:12,opacity:0.55,margin:"0 0 8px",textTransform:"uppercase",letterSpacing:0.5}},"Übung auswählen"),
+      React.createElement("div",{style:{display:"flex",gap:6,flexWrap:"wrap"}},
+        METRICS.map(m=>React.createElement(Btn,{
+          key:m.id,onClick:()=>setActiveMetric(m.id),
+          style:{background:activeMetric===m.id?C.accent:"rgba(255,255,255,0.06)",
+            color:activeMetric===m.id?"#060c27":C.text,
+            border:"1px solid "+(activeMetric===m.id?C.accent:C.cardBorder),
+            borderRadius:20,padding:"6px 12px",fontSize:12,fontWeight:activeMetric===m.id?700:400,
+            whiteSpace:"nowrap"}
+        },m.name))
+      )
+    ),
+
+    // Three ranking views for selected metric
+    React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:14}},
+      React.createElement("div",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:20,fontWeight:700}},currentMetric.name),
+      React.createElement("span",{style:{fontSize:12,opacity:0.5}},"in "+currentMetric.unit)
+    ),
+
+    React.createElement(RankCard,{
+      title:"Beste Steigerung",
+      subtitle:"Wer hat sich am meisten verbessert (in %)?",
+      items:rankings.byImprovement,
+      valueKey:"improvementPct",
+      formatVal:s=>(s.improvementPct>0?"+":"")+s.improvementPct.toFixed(1)+"% ("+s.first+"→"+s.last+" "+currentMetric.unit+")",
+      color:"#22c55e"
+    }),
+
+    React.createElement(RankCard,{
+      title:"Aktuelle Bestleistung",
+      subtitle:currentMetric.higherBetter===false?"Niedrigstes Ergebnis gewinnt":"Höchstes Ergebnis gewinnt",
+      items:rankings.byCurrent,
+      valueKey:"current",
+      formatVal:s=>s.current+" "+currentMetric.unit,
+      color:C.accent
+    }),
+
+    React.createElement(RankCard,{
+      title:"Absoluter Zuwachs",
+      subtitle:"Wer hat den größten absoluten Fortschritt erzielt?",
+      items:rankings.byAbsolute,
+      valueKey:"improvementValue",
+      formatVal:s=>{const v=s.improvementValue;return(v>0?"+":"")+Math.abs(currentMetric.id==="sprint"?v.toFixed(2):Math.round(v))+" "+currentMetric.unit;},
+      color:"#a78bfa"
+    })
+  );
+}
+
 /* ===== SPIELERLISTE ===== */
 const EMPTY_FORM={name:"",position:"",email:"",age:"",plan:"",weight:"",height:"",plan_start_date:""};
 
 function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineCreated,onRemoveCombine,onReopenCombine,onCombineUpdated,activeCombineForView}){
   const [q,setQ]=useState("");
-  const [view,setView]=useState("list");// "list"|"combine"|"attendance"
+  const [view,setView]=useState("list");// "list"|"combine"|"attendance"|"team"
 
   // Auto-open combine view when parent signals a reopen
   useEffect(()=>{
@@ -1430,6 +1596,7 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
   if(view==="attendance"){if(window.fireTourEvent)window.fireTourEvent('attendance_opened');return React.createElement(AttendanceView,{players,onPlayersUpdated,onClose:()=>setView("list")});}
   if(view==="motivation"){if(window.fireTourEvent)window.fireTourEvent("motivation_round_opened");return React.createElement(MotivationRound,{players,onPlayersUpdated,onClose:()=>setView("list")});}
   if(view==="weightround") return React.createElement(WeightRound,{players,onPlayersUpdated,onClose:()=>setView("list")});
+  if(view==="team") return React.createElement(TeamBestleistungen,{players,onClose:()=>setView("list")});
 
   return React.createElement("div",null,
     /* Header */
@@ -1452,6 +1619,13 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
         React.createElement("div",{style:{fontSize:22,marginBottom:4}},"📋"),
         React.createElement("div",null,"Anwesenheit"),
         React.createElement("div",{style:{fontSize:11,opacity:0.6,marginTop:2,fontWeight:400}},"Tageserfassung")
+      )
+    ),
+    React.createElement(Btn,{onClick:()=>setView("team"),style:{width:"100%",marginBottom:10,background:"rgba(245,158,11,0.12)",color:"#f59e0b",border:"1px solid rgba(245,158,11,0.35)",borderRadius:14,padding:"12px 10px",fontWeight:700,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",gap:12}},
+      React.createElement("div",{style:{fontSize:20}},"🏆"),
+      React.createElement("div",{style:{textAlign:"left"}},
+        React.createElement("div",null,"Team Bestleistungen"),
+        React.createElement("div",{style:{fontSize:11,opacity:0.7,fontWeight:400,marginTop:1}},"Vergleich aller Athleten")
       )
     ),
     React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}},

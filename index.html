@@ -172,21 +172,36 @@ async function loadPlayers(){
   });
 }
 async function loadCombines(){
-  try{const {data}=await sb.from('combines').select('*').order('combine_date',{ascending:false});return data||[];}catch(_){return [];}
+  try{
+    const {data:cmbs}=await sb.from('combines').select('*').order('combine_date',{ascending:false});
+    if(!cmbs)return [];
+    // Load measured players per combine
+    const {data:cp}=await sb.from('combine_players').select('combine_id,player_id');
+    const cpMap={};
+    (cp||[]).forEach(r=>{if(!cpMap[r.combine_id])cpMap[r.combine_id]=[];cpMap[r.combine_id].push(r.player_id);});
+    return cmbs.map(c=>({...c,measuredPlayerIds:cpMap[c.id]||[]}));
+  }catch(_){return [];}
 }
 async function deleteCombine(id){
+  await sb.from('combine_players').delete().eq('combine_id',id);
   const {error}=await sb.from('combines').delete().eq('id',id);
   if(error)throw error;
+}
+async function updateCombineStatus(id,status,measuredCount,totalCount){
+  await sb.from('combines').update({status,measured_players:measuredCount,total_players:totalCount}).eq('id',id);
+}
+async function addCombinePlayer(combineId,playerId){
+  await sb.from('combine_players').upsert({combine_id:combineId,player_id:playerId},{onConflict:'combine_id,player_id'});
 }
 async function getUid(){
   const {data}=await sb.auth.getSession();
   return data.session?.user?.id||null;
 }
-async function saveCombineToDB(label,date){
+async function saveCombineToDB(label,date,totalPlayers){
   const uid=await getUid();
-  const {data,error}=await sb.from('combines').insert({label,combine_date:date,owner_id:uid}).select().single();
+  const {data,error}=await sb.from('combines').insert({label,combine_date:date,owner_id:uid,status:'open',total_players:totalPlayers||0,measured_players:0}).select().single();
   if(error)throw error;
-  return data;
+  return {...data,measuredPlayerIds:[]};
 }
 async function savePlayer(player){
   const uid=await getUid();
@@ -312,7 +327,7 @@ function Toast({msg,onDone}){
 /* =====================================================
    COMBINE VIEW — blitzschnelle Erst- und Folgeerfassung
    ===================================================== */
-function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated}){
+function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated,onCombineUpdated,initialCombine}){
   // Step 0 = choose/create combine, Step 1 = select players, Step 2 = rapid entry
   const [step,setStep]=useState(0);
   const [combineLabel,setCombineLabel]=useState(window._tourActive?"Testmessung":"");
@@ -414,9 +429,13 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
   async function handleSaveAll(){
     setSaving(true);
     try{
-      if(combineLabel.trim()){
-        await saveCombineToDB(combineLabel.trim(),combineDate);
+      // Create or reuse combine entry
+      let combineEntry=activeCombine;
+      if(!combineEntry&&combineLabel.trim()){
+        combineEntry=await saveCombineToDB(combineLabel.trim(),combineDate,players.length);
+        onCombineCreated(combineEntry);
       }
+
       const updates=[];
       for(const pid of selectedPlayers){
         const player=players.find(p=>p.id===pid);
@@ -428,13 +447,11 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
           if(raw===""||isNaN(Number(raw)))continue;
           const val=Number(raw);
           await saveMeasurement(pid,m.id,month,val);
-          // update local data
           const series=[...(newData[m.id]||[])];
           const idx=series.findIndex(s=>s.month===month);
           if(idx>=0)series[idx]={month,value:val};else series.push({month,value:val});
           series.sort((a,b)=>a.month.localeCompare(b.month));
           newData[m.id]=series;
-          // check PR
           if(checkAndUpdatePB(player,m.id,val,month)){
             await savePersonalBest(pid,m.id,val,month);
             newPBs[m.id]={value:val,month};
@@ -443,8 +460,21 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
         }
         updates.push({...player,data:newData,personalBests:newPBs});
         if(newPRFound)setPrToast(newPRFound);
+        // Track measured player in combine
+        if(combineEntry){
+          await addCombinePlayer(combineEntry.id,pid);
+        }
       }
       onPlayersUpdated(updates);
+
+      // Update combine progress
+      if(combineEntry){
+        const newMeasured=[...new Set([...(combineEntry.measuredPlayerIds||[]),...selectedPlayers])];
+        const allDone=newMeasured.length>=players.length;
+        await updateCombineStatus(combineEntry.id,allDone?'done':'open',newMeasured.length,players.length);
+        if(onCombineUpdated)onCombineUpdated({...combineEntry,measuredPlayerIds:newMeasured,measured_players:newMeasured.length,status:allDone?'done':'open'});
+      }
+
       setSaved(true);
       if(window.fireTourEvent)window.fireTourEvent("combine_done");
       window._afterCombine=true;
@@ -453,12 +483,23 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
     setSaving(false);
   }
 
-  if(saved) return React.createElement("div",{style:{textAlign:"center",padding:40}},
-    React.createElement("div",{style:{fontSize:48,marginBottom:12}},"✅"),
-    React.createElement("h2",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:24,margin:"0 0 8px"}},"Daten gespeichert!"),
-    React.createElement("p",{style:{opacity:0.7,marginBottom:24}},`${selectedPlayers.length} Spieler · ${METRICS.filter(m=>activePlayers.some(p=>effectiveVal(p.id,m.id)!=="")).length} Metriken`),
-    React.createElement(Btn,{onClick:onClose,style:{background:C.accent,color:"#060c27",borderRadius:12,padding:"13px 30px",fontWeight:700,fontSize:16}},"Fertig")
-  );
+  if(saved){
+    const newMeasured=activeCombine?[...new Set([...(activeCombine.measuredPlayerIds||[]),...selectedPlayers])]:selectedPlayers;
+    const totalP=players.length;
+    const remaining=totalP-newMeasured.length;
+    const allDone=remaining<=0;
+    return React.createElement("div",{style:{textAlign:"center",padding:40}},
+      React.createElement("div",{style:{fontSize:48,marginBottom:12}},allDone?"🎉":"✅"),
+      React.createElement("h2",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:24,margin:"0 0 8px"}},allDone?"Messung abgeschlossen!":"Teilmessung gespeichert!"),
+      React.createElement("p",{style:{opacity:0.7,marginBottom:8}},`${selectedPlayers.length} Spieler gemessen · ${newMeasured.length}/${totalP} gesamt`),
+      !allDone&&React.createElement("p",{style:{color:C.accent,fontWeight:600,marginBottom:20,fontSize:14}},`⏳ Noch ${remaining} Spieler ausstehend — Messung bleibt offen`),
+      allDone&&React.createElement("p",{style:{color:"#22c55e",fontWeight:600,marginBottom:20,fontSize:14}},"✓ Alle Spieler gemessen"),
+      React.createElement("div",{style:{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}},
+        !allDone&&React.createElement(Btn,{onClick:()=>{setSaved(false);setStep(1);setSelectedPlayers([]);},style:{background:"rgba(72,207,253,0.15)",color:C.accent,border:`1px solid ${C.accent}`,borderRadius:12,padding:"11px 20px",fontWeight:700,fontSize:14}},"Weitere messen →"),
+        React.createElement(Btn,{onClick:onClose,style:{background:C.accent,color:"#060c27",borderRadius:12,padding:"11px 20px",fontWeight:700,fontSize:14}},"Fertig")
+      )
+    );
+  }
 
   /* Step 0: Label + Typ */
   if(step===0) return React.createElement("div",null,
@@ -515,11 +556,25 @@ function CombineView({players,combines,onClose,onPlayersUpdated,onCombineCreated
       React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:8,maxHeight:"50vh",overflowY:"auto"}},
         players.map(p=>{
           const sel=selectedPlayers.includes(p.id);
-          return React.createElement(Btn,{key:p.id,onClick:()=>togglePlayer(p.id),style:{display:"flex",alignItems:"center",gap:12,background:sel?"rgba(72,207,253,0.12)":"rgba(255,255,255,0.04)",border:`1px solid ${sel?C.accent:C.cardBorder}`,borderRadius:12,padding:"10px 14px",color:C.text,textAlign:"left"}},
-            React.createElement("span",{style:{width:22,height:22,borderRadius:"50%",border:`2px solid ${sel?C.accent:"rgba(255,255,255,0.3)"}`,background:sel?C.accent:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:12,color:"#060c27",fontWeight:800}},sel?"✓":""),
+          const alreadyMeasured=activeCombine&&(activeCombine.measuredPlayerIds||[]).includes(p.id);
+          return React.createElement(Btn,{
+            key:p.id,
+            onClick:()=>{if(!alreadyMeasured)togglePlayer(p.id);},
+            style:{display:"flex",alignItems:"center",gap:12,
+              background:alreadyMeasured?"rgba(34,197,94,0.08)":sel?"rgba(72,207,253,0.12)":"rgba(255,255,255,0.04)",
+              border:`1px solid ${alreadyMeasured?"#22c55e":sel?C.accent:C.cardBorder}`,
+              borderRadius:12,padding:"10px 14px",color:C.text,textAlign:"left",
+              opacity:alreadyMeasured?0.65:1,cursor:alreadyMeasured?"default":"pointer"}
+          },
+            React.createElement("span",{style:{width:22,height:22,borderRadius:"50%",
+              border:`2px solid ${alreadyMeasured?"#22c55e":sel?C.accent:"rgba(255,255,255,0.3)"}`,
+              background:alreadyMeasured?"#22c55e":sel?C.accent:"transparent",
+              display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:12,color:"#060c27",fontWeight:800}},
+              alreadyMeasured?"✓":sel?"✓":""),
             React.createElement("div",null,
               React.createElement("div",{style:{fontWeight:600,fontSize:15}},p.name),
-              React.createElement("div",{style:{fontSize:12,opacity:0.6}},p.position||"—")
+              React.createElement("div",{style:{fontSize:12,opacity:0.6}},
+                alreadyMeasured?"✓ Bereits gemessen":p.position||"—")
             )
           );
         })
@@ -996,12 +1051,10 @@ function QuickMotivationModal({player,onClose,onSaved,onPhotoSaved,onBodySaved})
     if(!weight&&!height)return;
     setSavingBody(true);
     try{
-      const updated={...player,weight:weight?Number(weight):player.weight,height:height?Number(height):player.height};
+      const updated={...player,weight:weight?Number(weight):player.weight};
       await savePlayer(updated);
       // Also save weight as measurement for tracking
-      if(weight){
-        await saveMeasurement(player.id,'weight',CURRENT_MONTH,Number(weight));
-      }
+      await saveMeasurement(player.id,'weight',CURRENT_MONTH,Number(weight));
       onBodySaved(updated);
       setBodySaved(true);
       if(window.fireTourEvent)window.fireTourEvent("quick_body_saved");
@@ -1041,22 +1094,15 @@ function QuickMotivationModal({player,onClose,onSaved,onPhotoSaved,onBodySaved})
       React.createElement("div",{style:{borderTop:`1px solid ${C.cardBorder}`,marginBottom:14}}),
 
       // Gewicht & Größe
-      React.createElement("p",{style:{fontSize:12,opacity:0.6,margin:"0 0 10px",textTransform:"uppercase",letterSpacing:0.5}},"Körperdaten"),
-      React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}},
-        React.createElement("div",null,
-          React.createElement("label",{style:{fontSize:11,opacity:0.5,display:"block",marginBottom:4,textAlign:"center"}},"Gewicht (kg)"),
-          React.createElement("input",{type:"number",inputMode:"decimal",placeholder:player.weight?String(player.weight):"—",value:weight,onChange:e=>setWeight(e.target.value),style:inputS})
-        ),
-        React.createElement("div",null,
-          React.createElement("label",{style:{fontSize:11,opacity:0.5,display:"block",marginBottom:4,textAlign:"center"}},"Größe (cm)"),
-          React.createElement("input",{type:"number",inputMode:"decimal",placeholder:player.height?String(player.height):"—",value:height,onChange:e=>setHeight(e.target.value),style:inputS})
-        )
+      React.createElement("p",{style:{fontSize:12,opacity:0.6,margin:"0 0 10px",textTransform:"uppercase",letterSpacing:0.5}},"Gewicht"),
+      React.createElement("div",{style:{marginBottom:10}},
+        React.createElement("input",{type:"number",inputMode:"decimal",placeholder:player.weight?`Aktuell: ${player.weight} kg`:"Gewicht in kg",value:weight,onChange:e=>setWeight(e.target.value),style:{...inputS,textAlign:"left",padding:"12px 14px"}})
       ),
       React.createElement(Btn,{
         onClick:saveBody,
-        disabled:savingBody||(!weight&&!height)||bodySaved,
-        style:{width:"100%",background:bodySaved?"rgba(34,197,94,0.15)":(weight||height)?"rgba(72,207,253,0.15)":"rgba(255,255,255,0.05)",color:bodySaved?"#22c55e":(weight||height)?C.accent:"rgba(255,255,255,0.3)",border:`1px solid ${bodySaved?"#22c55e":(weight||height)?C.accent:"rgba(255,255,255,0.1)"}`,borderRadius:12,padding:"11px",fontSize:14,fontWeight:700,marginBottom:16}
-      }, savingBody?"Speichert…":bodySaved?"✓ Körperdaten gespeichert":"Körperdaten speichern"),
+        disabled:savingBody||!weight||bodySaved,
+        style:{width:"100%",background:bodySaved?"rgba(34,197,94,0.15)":weight?"rgba(72,207,253,0.15)":"rgba(255,255,255,0.05)",color:bodySaved?"#22c55e":weight?C.accent:"rgba(255,255,255,0.3)",border:`1px solid ${bodySaved?"#22c55e":weight?C.accent:"rgba(255,255,255,0.1)"}`,borderRadius:12,padding:"11px",fontSize:14,fontWeight:700,marginBottom:16}
+      }, savingBody?"Speichert…":bodySaved?"✓ Gewicht gespeichert":"Gewicht speichern"),
 
       // Divider
       React.createElement("div",{style:{borderTop:`1px solid ${C.cardBorder}`,marginBottom:14}}),
@@ -1195,10 +1241,99 @@ function MotivationRound({players,onPlayersUpdated,onClose}){
   );
 }
 
+/* ===== GEWICHTSRUNDE ===== */
+function WeightRound({players,onPlayersUpdated,onClose}){
+  const [date,setDate]=useState(todayKey());
+  const [weights,setWeights]=useState({});
+  const [saving,setSaving]=useState(false);
+  const [done,setDone]=useState(false);
+
+  // Pre-fill with current weights
+  useEffect(()=>{
+    const w={};
+    players.forEach(p=>{w[p.id]=p.weight?String(p.weight):"";});
+    setWeights(w);
+  },[]);
+
+  const month=date.slice(0,7);
+  const filled=Object.values(weights).filter(v=>v!=="").length;
+
+  async function saveAll(){
+    setSaving(true);
+    try{
+      const updates=[];
+      for(const p of players){
+        const val=weights[p.id];
+        if(!val||isNaN(Number(val)))continue;
+        const num=Number(val);
+        // Save as measurement
+        await saveMeasurement(p.id,'weight',month,num);
+        // Save in player record
+        const updated={...p,weight:num};
+        await savePlayer(updated);
+        // Update measurements data locally
+        const series=[...(p.data.weight||[])];
+        const idx=series.findIndex(s=>s.month===month);
+        if(idx>=0)series[idx]={month,value:num};else series.push({month,value:num});
+        series.sort((a,b)=>a.month.localeCompare(b.month));
+        updates.push({...updated,data:{...p.data,weight:series}});
+      }
+      if(updates.length>0)onPlayersUpdated(updates);
+      setDone(true);
+    }catch(e){alert("Fehler: "+e.message);}
+    setSaving(false);
+  }
+
+  if(done) return React.createElement("div",{style:{textAlign:"center",padding:40}},
+    React.createElement("div",{style:{fontSize:48,marginBottom:12}},"✅"),
+    React.createElement("h2",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:22,margin:"0 0 8px"}},"Gewichte gespeichert"),
+    React.createElement("p",{style:{opacity:0.7,marginBottom:24}},`${filled} von ${players.length} Spielern · ${new Date(date+'T12:00:00').toLocaleDateString('de-DE')}`),
+    React.createElement(Btn,{onClick:onClose,style:{background:C.accent,color:"#060c27",borderRadius:12,padding:"13px 30px",fontWeight:700,fontSize:16}},"Fertig")
+  );
+
+  return React.createElement("div",null,
+    React.createElement("button",{onClick:onClose,style:{background:"none",border:"none",color:C.accent,fontSize:15,cursor:"pointer",padding:0,marginBottom:16,fontFamily:"inherit"}},"‹ Zurück"),
+    React.createElement(Card,{style:{marginBottom:12}},
+      React.createElement(SectionTitle,{sub:"Gewichte für alle Spieler eintragen"},"⚖️ Gewichtsrunde"),
+      React.createElement("div",{style:{marginBottom:12}},
+        React.createElement("label",{style:{fontSize:12,opacity:0.6,display:"block",marginBottom:6}},"DATUM"),
+        React.createElement("input",{type:"date",value:date,onChange:e=>setDate(e.target.value),style:{...fieldStyle,colorScheme:"dark"}})
+      ),
+      React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,fontSize:13,opacity:0.7}},
+        React.createElement("span",null,`${filled} von ${players.length} eingetragen`)
+      ),
+      React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:8}},
+        players.map(p=>
+          React.createElement("div",{key:p.id,style:{display:"flex",alignItems:"center",gap:12,background:"rgba(255,255,255,0.04)",border:`1px solid ${weights[p.id]?C.accent:C.cardBorder}`,borderRadius:12,padding:"10px 14px",transition:"border-color 0.2s"}},
+            React.createElement("div",{style:{width:36,height:36,borderRadius:"50%",background:"rgba(72,207,253,0.15)",border:`1px solid ${C.accent}`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Saira Condensed',sans-serif",fontWeight:700,fontSize:14,color:C.accent,flexShrink:0}},
+              p.name.split(" ").filter(Boolean).map(n=>n[0]).join("")
+            ),
+            React.createElement("div",{style:{flex:1,minWidth:0}},
+              React.createElement("div",{style:{fontWeight:600,fontSize:14}},p.name),
+              p.weight&&React.createElement("div",{style:{fontSize:11,opacity:0.5}},`Zuletzt: ${p.weight} kg`)
+            ),
+            React.createElement("div",{style:{display:"flex",alignItems:"center",gap:6,flexShrink:0}},
+              React.createElement("input",{
+                type:"number",inputMode:"decimal",
+                placeholder:p.weight?String(p.weight):"kg",
+                value:weights[p.id]||"",
+                onChange:e=>setWeights(prev=>({...prev,[p.id]:e.target.value})),
+                style:{...fieldStyle,width:80,textAlign:"center",padding:"8px 10px",fontSize:15,fontWeight:700,color:C.accent}
+              }),
+              React.createElement("span",{style:{fontSize:12,opacity:0.5}},weights[p.id]?"kg":"")
+            )
+          )
+        )
+      )
+    ),
+    React.createElement(Btn,{onClick:saveAll,disabled:saving||filled===0,style:{width:"100%",background:filled>0?C.accent:"rgba(255,255,255,0.1)",color:filled>0?"#060c27":"rgba(255,255,255,0.3)",borderRadius:12,padding:"14px",fontWeight:700,fontSize:16}},saving?"Speichert…":"Gewichte speichern")
+  );
+}
+
 /* ===== SPIELERLISTE ===== */
 const EMPTY_FORM={name:"",position:"",email:"",age:"",plan:"",weight:"",height:"",plan_start_date:""};
 
-function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineCreated,onRemoveCombine}){
+function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineCreated,onRemoveCombine,onReopenCombine}){
   const [q,setQ]=useState("");
   const [view,setView]=useState("list");// "list"|"combine"|"attendance"
   const [showForm,setShowForm]=useState(false);
@@ -1283,9 +1418,10 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
     pressStartRef.current=null;
   }
 
-  if(view==="combine"){if(window.fireTourEvent)window.fireTourEvent('combine_opened');return React.createElement(CombineView,{players,combines,onClose:()=>setView("list"),onPlayersUpdated,onCombineCreated});}
+  if(view==="combine"){if(window.fireTourEvent)window.fireTourEvent('combine_opened');return React.createElement(CombineView,{players,combines,onClose:()=>{setReopenCombine(null);setView("list");},onPlayersUpdated,onCombineCreated,onCombineUpdated:(c)=>setCombines(prev=>prev.map(x=>x.id===c.id?c:x)),initialCombine:reopenCombine});}
   if(view==="attendance"){if(window.fireTourEvent)window.fireTourEvent('attendance_opened');return React.createElement(AttendanceView,{players,onPlayersUpdated,onClose:()=>setView("list")});}
   if(view==="motivation"){if(window.fireTourEvent)window.fireTourEvent("motivation_round_opened");return React.createElement(MotivationRound,{players,onPlayersUpdated,onClose:()=>setView("list")});}
+  if(view==="weightround") return React.createElement(WeightRound,{players,onPlayersUpdated,onClose:()=>setView("list")});
 
   return React.createElement("div",null,
     /* Header */
@@ -1310,33 +1446,56 @@ function PlayerList({players,combines,onSelect,onAdd,onPlayersUpdated,onCombineC
         React.createElement("div",{style:{fontSize:11,opacity:0.6,marginTop:2,fontWeight:400}},"Tageserfassung")
       )
     ),
-    React.createElement(Btn,{onClick:()=>setView("motivation"),style:{width:"100%",marginBottom:16,background:"rgba(34,197,94,0.12)",color:"#22c55e",border:"1px solid rgba(34,197,94,0.4)",borderRadius:14,padding:"12px 10px",fontWeight:700,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",gap:12}},
-      React.createElement("div",{style:{fontSize:20}},"🟢"),
-      React.createElement("div",{style:{textAlign:"left"}},
+    React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}},
+      React.createElement(Btn,{onClick:()=>setView("motivation"),style:{background:"rgba(72,207,253,0.12)",color:C.accent,border:`1px solid ${C.cardBorder}`,borderRadius:14,padding:"14px 10px",fontWeight:700,fontSize:13,textAlign:"center"}},
+        React.createElement("div",{style:{fontSize:22,marginBottom:4}},"🎯"),
         React.createElement("div",null,"Motivationsrunde"),
-        React.createElement("div",{style:{fontSize:11,opacity:0.7,fontWeight:400,marginTop:1}},"Alle Spieler auf einmal erfassen")
+        React.createElement("div",{style:{fontSize:11,opacity:0.6,marginTop:2,fontWeight:400}},"Alle Spieler auf einmal")
+      ),
+      React.createElement(Btn,{onClick:()=>setView("weightround"),style:{background:"rgba(72,207,253,0.12)",color:C.accent,border:`1px solid ${C.cardBorder}`,borderRadius:14,padding:"14px 10px",fontWeight:700,fontSize:13,textAlign:"center"}},
+        React.createElement("div",{style:{fontSize:22,marginBottom:4}},"⚖️"),
+        React.createElement("div",null,"Gewichtsrunde"),
+        React.createElement("div",{style:{fontSize:11,opacity:0.6,marginTop:2,fontWeight:400}},"Alle Gewichte eintragen")
       )
     ),
 
     /* Combine-Historie */
     combines.length>0&&React.createElement("div",{style:{marginBottom:14}},
-      React.createElement("p",{style:{fontSize:12,opacity:0.55,margin:"0 0 8px",textTransform:"uppercase",letterSpacing:0.5}},"Letzte Messungen"),
-      React.createElement("div",{style:{display:"flex",gap:8,overflowX:"auto",paddingBottom:4}},
-        combines.slice(0,10).map(c=>
-          React.createElement("div",{key:c.id,style:{flexShrink:0,background:"rgba(72,207,253,0.07)",border:`1px solid ${C.cardBorder}`,borderRadius:10,padding:"8px 12px",fontSize:12,position:"relative",minWidth:120}},
-            React.createElement("div",{style:{fontWeight:700,color:C.accent,paddingRight:18}},c.label),
-            React.createElement("div",{style:{opacity:0.6,marginTop:2}},new Date(c.combine_date).toLocaleDateString('de-DE')),
-            React.createElement("button",{
-              onClick:async(e)=>{
-                e.stopPropagation();
-                if(!window.confirm(`"${c.label}" löschen?`))return;
-                try{await deleteCombine(c.id);onRemoveCombine(c.id);}
-                catch(err){alert("Fehler: "+err.message);}
-              },
-              style:{position:"absolute",top:4,right:4,background:"none",border:"none",color:"rgba(255,255,255,0.3)",fontSize:13,cursor:"pointer",padding:"2px 4px",lineHeight:1}
-            },"✕")
-          )
-        )
+      React.createElement("p",{style:{fontSize:12,opacity:0.55,margin:"0 0 8px",textTransform:"uppercase",letterSpacing:0.5}},"Messungen"),
+      React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:8}},
+        combines.slice(0,8).map(c=>{
+          const isOpen=c.status==="open"||!c.status;
+          const measured=c.measured_players||0;
+          const total=c.total_players||0;
+          const pct=total>0?Math.round((measured/total)*100):0;
+          return React.createElement("div",{key:c.id,style:{background:isOpen?"rgba(72,207,253,0.07)":"rgba(255,255,255,0.04)",border:`1px solid ${isOpen?C.accent:C.cardBorder}`,borderRadius:12,padding:"10px 14px",position:"relative"}},
+            React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:isOpen&&total>0?6:0}},
+              React.createElement("div",null,
+                React.createElement("div",{style:{fontWeight:700,color:isOpen?C.accent:"rgba(255,255,255,0.7)",fontSize:13,paddingRight:20}},c.label),
+                React.createElement("div",{style:{opacity:0.55,fontSize:11,marginTop:2}},new Date(c.combine_date).toLocaleDateString('de-DE')+(isOpen?" · Offen":" · Abgeschlossen"))
+              ),
+              React.createElement("div",{style:{display:"flex",gap:6,alignItems:"center"}},
+                isOpen&&React.createElement(Btn,{
+                  onClick:()=>onReopenCombine(c),
+                  style:{background:C.accent,color:"#060c27",borderRadius:8,padding:"4px 10px",fontSize:11,fontWeight:800}
+                },"Fortsetzen"),
+                React.createElement("button",{
+                  onClick:async(e)=>{e.stopPropagation();if(!window.confirm(`"${c.label}" löschen?`))return;try{await deleteCombine(c.id);onRemoveCombine(c.id);}catch(err){alert("Fehler: "+err.message);}},
+                  style:{background:"none",border:"none",color:"rgba(255,255,255,0.3)",fontSize:13,cursor:"pointer",padding:"2px 4px",lineHeight:1}
+                },"✕")
+              )
+            ),
+            isOpen&&total>0&&React.createElement("div",null,
+              React.createElement("div",{style:{display:"flex",justifyContent:"space-between",fontSize:11,opacity:0.6,marginBottom:3}},
+                React.createElement("span",null,`${measured} von ${total} Spielern gemessen`),
+                React.createElement("span",null,`${pct}%`)
+              ),
+              React.createElement("div",{style:{height:3,background:"rgba(255,255,255,0.1)",borderRadius:2}},
+                React.createElement("div",{style:{width:`${pct}%`,height:"100%",background:C.accent,borderRadius:2,transition:"width 0.3s"}})
+              )
+            )
+          );
+        })
       )
     ),
 
@@ -1954,6 +2113,7 @@ function AppWithTour(){
   const [loading,setLoading]=useState(true);
   const [selectedId,setSelectedId]=useState(null);
   const [isTourActive,setIsTourActive]=useState(false);
+  const [reopenCombine,setReopenCombine]=useState(null);
 
   useEffect(()=>{
     Promise.all([loadPlayers(),loadCombines()])
@@ -1992,7 +2152,7 @@ function AppWithTour(){
     React.createElement("div",{style:{maxWidth:480,margin:"0 auto"}},
       selected
         ?React.createElement(PlayerDetail,{player:selected,onBack:()=>{setSelectedId(null);if(window.fireTourEvent)window.fireTourEvent("went_back");},onUpdate:updatePlayer,onDelete:removePlayer})
-        :React.createElement(PlayerList,{players:visiblePlayers,combines,onSelect:(id)=>{setSelectedId(id);if(window.fireTourEvent)window.fireTourEvent('player_opened');},onAdd:addPlayer,onPlayersUpdated:updatePlayers,onCombineCreated:addCombine,onRemoveCombine:(id)=>setCombines(prev=>prev.filter(c=>c.id!==id))})
+        :React.createElement(PlayerList,{players:visiblePlayers,combines,onSelect:(id)=>{setSelectedId(id);if(window.fireTourEvent)window.fireTourEvent('player_opened');},onAdd:addPlayer,onPlayersUpdated:updatePlayers,onCombineCreated:addCombine,onRemoveCombine:(id)=>setCombines(prev=>prev.filter(c=>c.id!==id)),onReopenCombine:(c)=>{setReopenCombine(c);setView('combine');}})
     )
   );
 

@@ -1120,11 +1120,21 @@ function MotivationRound({players,onPlayersUpdated,onClose}){
 
   async function setMot(pid,key){
     setSaving(pid);
+    // Toggle: if already active → remove
+    const isActive=motState[pid]===key;
     try{
-      await saveMotivation(pid,week,key);
-      setMotState(prev=>({...prev,[pid]:key}));
-      const p=players.find(x=>x.id===pid);
-      onPlayersUpdated([{...p,motivation:{...p.motivation,[week]:key}}]);
+      if(isActive){
+        await sb.from('motivation').delete().match({player_id:pid,month:week});
+        setMotState(prev=>({...prev,[pid]:null}));
+        const p=players.find(x=>x.id===pid);
+        const newMot={...p.motivation};delete newMot[week];
+        onPlayersUpdated([{...p,motivation:newMot}]);
+      } else {
+        await saveMotivation(pid,week,key);
+        setMotState(prev=>({...prev,[pid]:key}));
+        const p=players.find(x=>x.id===pid);
+        onPlayersUpdated([{...p,motivation:{...p.motivation,[week]:key}}]);
+      }
     }catch(e){alert("Fehler: "+e.message);}
     setSaving(null);
   }

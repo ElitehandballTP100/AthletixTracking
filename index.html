@@ -41,7 +41,18 @@
 <script crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.min.js"></script>
 <script crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.7/dist/umd/supabase.min.js"></script>
 <script>
-window.onerror = function(msg,src,line){var b=document.getElementById('error-box');b.style.display='block';b.textContent='JS-Fehler: '+msg+' (Zeile '+line+')';};
+window.onerror = function(msg,src,line,col,err){
+  var b=document.getElementById('error-box');b.style.display='block';
+  var detail=err&&err.stack?err.stack.split('\n')[0]:msg;
+  b.textContent='JS-Fehler: '+detail+(line?' (Zeile '+line+')':'');
+  console.error('Error:',err||msg,'src:',src,'line:',line);
+  return false;
+};
+window.addEventListener('unhandledrejection',function(e){
+  var b=document.getElementById('error-box');b.style.display='block';
+  b.textContent='Fehler: '+(e.reason&&e.reason.message?e.reason.message:String(e.reason));
+  console.error('Unhandled rejection:',e.reason);
+});
 </script>
 <script>
 const SUPABASE_URL = 'https://mpztrebwmcuhlnqpskjl.supabase.co';
@@ -285,7 +296,7 @@ function Btn({onClick,children,style,disabled,className}){
 function checkAndUpdatePB(player,metricId,newValue,month){
   const metric=METRICS.find(m=>m.id===metricId);
   if(!metric||metric.higherBetter===null)return false;
-  const existing=player.personalBests[metricId];
+  const existing=(player.personalBests||{})[metricId];
   if(!existing)return true;
   if(metric.higherBetter&&newValue>existing.value)return true;
   if(!metric.higherBetter&&newValue<existing.value)return true;
@@ -998,7 +1009,7 @@ function QuickMotivationModal({player,onClose,onSaved,onPhotoSaved,onBodySaved})
     setSavingBody(false);
   }
 
-  const current=player.motivation[week];
+  const current=(player.motivation||{})[week];
   const inputS={...fieldStyle,padding:"10px 12px",fontSize:16,fontWeight:700,textAlign:"center"};
 
   return React.createElement("div",{style:{position:"fixed",inset:0,background:"rgba(6,12,39,0.92)",zIndex:9990,display:"flex",alignItems:"flex-end",padding:16},onClick:onClose},
@@ -1471,7 +1482,7 @@ function DevSummary({player,onUpdate}){
       const color=isWeight?C.accent:(m.positive===true?"#22c55e":m.positive===false?"#ef4444":C.accent);
       const barW=m.hasSeries?Math.min(Math.abs(m.pct),100):0;
       const displayPct=m.higherBetter===false?-m.pct:m.pct;
-      const pb=player.personalBests[m.id];
+      const pb=(player.personalBests||{})[m.id];
       const metric=METRICS.find(x=>x.id===m.id);
 
       return React.createElement("div",{key:m.id,style:{background:isOpen?"rgba(72,207,253,0.06)":"rgba(255,255,255,0.04)",border:`1px solid ${isOpen?C.accent:C.cardBorder}`,borderRadius:12,overflow:"hidden",transition:"border-color 0.2s"}},
@@ -1727,7 +1738,7 @@ function MotivationSection({player,onUpdate}){
     React.createElement("div",{style:{overflowX:"auto",marginBottom:16}},
       React.createElement("div",{style:{display:"flex",gap:10,paddingBottom:4,minWidth:"min-content"}},
         last8.map(w=>React.createElement("div",{key:w.key,style:{textAlign:"center",minWidth:40}},
-          React.createElement(MotDot,{value:player.motivation[w.key],size:22}),
+          React.createElement(MotDot,{value:(player.motivation||{})[w.key],size:22}),
           React.createElement("div",{style:{fontSize:10,opacity:0.6,marginTop:4,whiteSpace:"nowrap"}},w.label)
         ))
       )
@@ -1737,7 +1748,7 @@ function MotivationSection({player,onUpdate}){
       React.createElement("select",{value:motWeek,onChange:e=>setMotWeek(e.target.value),style:{...fieldStyle,marginBottom:10}},WEEKS.map(w=>React.createElement("option",{key:w.key,value:w.key},w.full))),
       React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}},
         MOT_ORDER.map(key=>{
-          const active=player.motivation[motWeek]===key;
+          const active=(player.motivation||{})[motWeek]===key;
           return React.createElement(Btn,{key,onClick:()=>setMotivation(key),style:{display:"flex",alignItems:"center",gap:8,background:active?MOT[key].color:"rgba(255,255,255,0.05)",border:`1px solid ${active?MOT[key].color:C.cardBorder}`,borderRadius:10,padding:"10px 12px",color:C.text,fontSize:13,fontWeight:600}},
             React.createElement("span",{style:{width:14,height:14,borderRadius:"50%",background:MOT[key].color,flexShrink:0}}),
             MOT[key].label

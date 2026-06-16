@@ -1891,7 +1891,7 @@ function Root(){
   },[]);
   if(IS_PREVIEW)return React.createElement(React.Fragment,null,
     React.createElement("div",{style:{background:"rgba(72,207,253,0.13)",borderBottom:"1px solid rgba(72,207,253,0.35)",padding:"9px 18px",textAlign:"center",fontSize:"13px",color:"rgba(255,255,255,0.88)",fontFamily:"system-ui,sans-serif"}},"Demo-Vorschau · Kein Login erforderlich"),
-    React.createElement(App,null)
+    React.createElement(AppWithTour,null)
   );
   if(session===undefined)return React.createElement("div",{style:{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:C.bg,color:C.text}},"Lädt…");
   if(!session)return React.createElement(Login,null);

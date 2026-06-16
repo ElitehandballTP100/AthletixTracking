@@ -1937,7 +1937,364 @@ function MotivationSection({player,onUpdate}){
 }
 
 /* ===== DETAILANSICHT ===== */
+
+/* ===== SPIELER DASHBOARD ===== */
+function PlayerDashboard({player}){
+  const [activeTab,setActiveTab]=useState("gesamt");
+  const TABS=[
+    {id:"gesamt",   label:"Gesamt"},
+    {id:"kraft",    label:"Kraft & Athletik"},
+    {id:"motivation",label:"Motivation"},
+    {id:"anwesenheit",label:"Anwesenheit"},
+    {id:"gewicht",  label:"Gewicht"},
+  ];
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+  const motColors={"green":"#22c55e","yellow":"#eab308","red":"#ef4444","darkred":"#7f1d1d"};
+  const motLabels={"green":"Sehr motiviert","yellow":"Durchschnittlich","red":"Wenig motiviert","darkred":"Gar kein Bock"};
+
+  const allWeeks=Object.keys(player.motivation||{}).sort();
+  const recentWeeks=allWeeks.slice(-12);
+
+  // Attendance stats
+  const attData=player.attendance||{};
+  const attDays=Object.keys(attData).sort();
+  const presentDays=attDays.filter(d=>attData[d]===true).length;
+  const absentDays=attDays.filter(d=>attData[d]===false).length;
+  const totalDays=attDays.length;
+  const attendanceRate=totalDays>0?Math.round((presentDays/totalDays)*100):0;
+
+  // Motivation stats
+  const motEntries=Object.entries(player.motivation||{});
+  const motCounts={green:0,yellow:0,red:0,darkred:0};
+  motEntries.forEach(([,v])=>{if(motCounts[v]!==undefined)motCounts[v]++;});
+  const totalMot=motEntries.length||1;
+
+  // Exercise progress
+  const exerciseMetrics=METRICS.filter(m=>m.id!=="weight");
+
+  function getProgress(metricId){
+    const series=(player.data[metricId]||[]).filter(s=>s.value!=null);
+    if(series.length<2)return null;
+    const first=series[0],last=series[series.length-1];
+    const diff=last.value-first.value;
+    const pct=first.value!==0?((diff/Math.abs(first.value))*100):0;
+    const m=METRICS.find(x=>x.id===metricId);
+    const positive=m.higherBetter===null?null:(m.higherBetter?diff>0:diff<0);
+    return{first:first.value,last:last.value,diff,pct,positive,unit:m.unit,series};
+  }
+
+  // Weight series
+  const weightSeries=(player.data.weight||[]).filter(s=>s.value!=null);
+
+  // ── Tab: Gesamt ──────────────────────────────────────────────────────────
+  function TabGesamt(){
+    const progressItems=exerciseMetrics.map(m=>({m,p:getProgress(m.id)})).filter(x=>x.p);
+    const pb=player.personalBests||{};
+    const trainingWeek=calcTrainingWeek(player.plan_start_date);
+
+    return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:12}},
+
+      // Bio card
+      React.createElement(Card,null,
+        React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px 16px"}},
+          React.createElement("div",null,
+            React.createElement("div",{style:{fontSize:11,opacity:0.5,textTransform:"uppercase",letterSpacing:0.5}},"Position"),
+            React.createElement("div",{style:{fontWeight:700,fontSize:14}},player.position||"—")
+          ),
+          React.createElement("div",null,
+            React.createElement("div",{style:{fontSize:11,opacity:0.5,textTransform:"uppercase",letterSpacing:0.5}},"Alter"),
+            React.createElement("div",{style:{fontWeight:700,fontSize:14}},player.age?player.age+" J.":"—")
+          ),
+          React.createElement("div",null,
+            React.createElement("div",{style:{fontSize:11,opacity:0.5,textTransform:"uppercase",letterSpacing:0.5}},"Gewicht"),
+            React.createElement("div",{style:{fontWeight:700,fontSize:14,color:C.accent}},player.weight?player.weight+" kg":"—")
+          ),
+          React.createElement("div",null,
+            React.createElement("div",{style:{fontSize:11,opacity:0.5,textTransform:"uppercase",letterSpacing:0.5}},"Größe"),
+            React.createElement("div",{style:{fontWeight:700,fontSize:14}},player.height?player.height+" cm":"—")
+          ),
+          trainingWeek&&React.createElement("div",{style:{gridColumn:"1/-1"}},
+            React.createElement("div",{style:{fontSize:11,opacity:0.5,textTransform:"uppercase",letterSpacing:0.5}},"Trainingswoche"),
+            React.createElement("div",{style:{fontWeight:800,fontSize:20,color:C.accent}},"TW "+trainingWeek)
+          )
+        )
+      ),
+
+      // Key stats row
+      React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}},
+        [
+          {label:"Anwesenheit",value:attendanceRate+"%",sub:presentDays+" Tage",color:"#22c55e"},
+          {label:"Motivation",value:Math.round((motCounts.green/totalMot)*100)+"%",sub:"Sehr motiviert",color:C.accent},
+          {label:"Übungen",value:progressItems.length,sub:"mit Daten",color:"#a78bfa"},
+        ].map((s,i)=>React.createElement(Card,{key:i,style:{textAlign:"center",padding:"12px 8px"}},
+          React.createElement("div",{style:{fontSize:22,fontWeight:800,color:s.color}},s.value),
+          React.createElement("div",{style:{fontSize:11,fontWeight:700,marginTop:2}},s.label),
+          React.createElement("div",{style:{fontSize:10,opacity:0.5,marginTop:1}},s.sub)
+        ))
+      ),
+
+      // Gesamtentwicklung Balken
+      progressItems.length>0&&React.createElement(Card,null,
+        React.createElement("div",{style:{fontSize:13,fontWeight:700,color:C.accent,marginBottom:12}},"Entwicklung auf einen Blick"),
+        React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:10}},
+          progressItems.map(({m,p})=>{
+            const color=p.positive===true?"#22c55e":p.positive===false?"#ef4444":C.accent;
+            const arrow=p.diff>0?"↑":p.diff<0?"↓":"→";
+            const barW=Math.min(Math.abs(p.pct),100);
+            const displayPct=m.higherBetter===false?-p.pct:p.pct;
+            return React.createElement("div",{key:m.id},
+              React.createElement("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:4,fontSize:12}},
+                React.createElement("span",{style:{fontWeight:600}},m.name),
+                React.createElement("span",{style:{color,fontWeight:700}},
+                  `${arrow} ${displayPct>0?"+":""}${displayPct.toFixed(1)}%  (${p.first}→${p.last} ${m.unit})`)
+              ),
+              React.createElement("div",{style:{height:5,background:"rgba(255,255,255,0.08)",borderRadius:3}},
+                React.createElement("div",{style:{width:barW+"%",height:"100%",background:color,borderRadius:3,transition:"width 0.5s"}})
+              )
+            );
+          })
+        )
+      ),
+
+      // Personal Bests
+      Object.keys(pb).length>0&&React.createElement(Card,null,
+        React.createElement("div",{style:{fontSize:13,fontWeight:700,color:"#f59e0b",marginBottom:10}},"🏆 Persönliche Bestleistungen"),
+        React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}},
+          Object.entries(pb).map(([mid,pbv])=>{
+            const m=METRICS.find(x=>x.id===mid);
+            if(!m)return null;
+            return React.createElement("div",{key:mid,style:{background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.3)",borderRadius:10,padding:"10px 12px"}},
+              React.createElement("div",{style:{fontSize:11,opacity:0.6}},m.name),
+              React.createElement("div",{style:{fontWeight:800,fontSize:18,color:"#f59e0b"}},pbv.value+" "+m.unit)
+            );
+          })
+        )
+      )
+    );
+  }
+
+  // ── Tab: Kraft & Athletik ─────────────────────────────────────────────────
+  function TabKraft(){
+    return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:14}},
+      exerciseMetrics.map(m=>{
+        const p=getProgress(m.id);
+        const chartData=(player.data[m.id]||[]).filter(s=>s.value!=null).map(s=>{
+          const mo=MONTHS.find(x=>x.key===s.month);
+          return{label:mo?mo.label:s.month,value:s.value};
+        });
+        const color=p?(p.positive===true?"#22c55e":p.positive===false?"#ef4444":C.accent):C.accent;
+        const pb=(player.personalBests||{})[m.id];
+        return React.createElement(Card,{key:m.id},
+          React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}},
+            React.createElement("div",null,
+              React.createElement("div",{style:{fontWeight:700,fontSize:15}},m.name),
+              p&&React.createElement("div",{style:{fontSize:12,color,fontWeight:600,marginTop:2}},
+                `${p.diff>0?"↑":"↓"} ${Math.abs(m.id==="sprint"?p.diff.toFixed(2):Math.round(p.diff))} ${m.unit} (${p.first} → ${p.last} ${m.unit})`)
+            ),
+            pb&&React.createElement("div",{style:{textAlign:"right"}},
+              React.createElement("div",{style:{fontSize:10,opacity:0.5}},"Bestleistung"),
+              React.createElement("div",{style:{fontSize:16,fontWeight:800,color:"#f59e0b"}},"🏆 "+pb.value+" "+m.unit)
+            )
+          ),
+          chartData.length>1
+            ?React.createElement(ResponsiveContainer,{width:"100%",height:150},
+                React.createElement(LineChart,{data:chartData,margin:{top:4,right:8,bottom:0,left:0}},
+                  React.createElement(CartesianGrid,{stroke:"rgba(255,255,255,0.06)"}),
+                  React.createElement(XAxis,{dataKey:"label",stroke:"rgba(255,255,255,0.4)",tick:{fontSize:10}}),
+                  React.createElement(YAxis,{stroke:"rgba(255,255,255,0.4)",tick:{fontSize:10},width:34,domain:["auto","auto"]}),
+                  React.createElement(Tooltip,{contentStyle:{background:"#060c27",border:"1px solid "+C.accent,borderRadius:8,color:"#fff",fontSize:12},formatter:v=>[v+" "+m.unit,m.name]}),
+                  React.createElement(Line,{type:"monotone",dataKey:"value",stroke:color,strokeWidth:2.5,dot:{r:3,fill:color},activeDot:{r:5}})
+                )
+              )
+            :React.createElement("div",{style:{textAlign:"center",opacity:0.4,fontSize:12,padding:"20px 0"}},"Noch keine Verlaufsdaten")
+        );
+      })
+    );
+  }
+
+  // ── Tab: Motivation ───────────────────────────────────────────────────────
+  function TabMotivation(){
+    const motWeekData=recentWeeks.map(w=>{
+      const v=player.motivation[w];
+      const wn=w.replace(/.*-W/,"KW");
+      return{week:wn,value:v,color:v?motColors[v]:"rgba(255,255,255,0.15)"};
+    });
+    const barChartData=[
+      {name:"Sehr motiviert",value:motCounts.green,color:"#22c55e"},
+      {name:"Durchschnittlich",value:motCounts.yellow,color:"#eab308"},
+      {name:"Wenig motiviert",value:motCounts.red,color:"#ef4444"},
+      {name:"Gar kein Bock",value:motCounts.darkred,color:"#7f1d1d"},
+    ];
+    const dominant=barChartData.reduce((a,b)=>b.value>a.value?b:a,barChartData[0]);
+    return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:12}},
+      // Summary card
+      React.createElement(Card,null,
+        React.createElement("div",{style:{fontSize:13,fontWeight:700,color:C.accent,marginBottom:12}},"Motivations-Übersicht"),
+        React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:8}},
+          barChartData.map(b=>React.createElement("div",{key:b.name},
+            React.createElement("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:3,fontSize:12}},
+              React.createElement("span",null,b.name),
+              React.createElement("span",{style:{color:b.color,fontWeight:700}},b.value+" Wochen ("+Math.round((b.value/totalMot)*100)+"%)")
+            ),
+            React.createElement("div",{style:{height:6,background:"rgba(255,255,255,0.08)",borderRadius:3}},
+              React.createElement("div",{style:{width:Math.round((b.value/totalMot)*100)+"%",height:"100%",background:b.color,borderRadius:3,transition:"width 0.5s"}})
+            )
+          ))
+        ),
+        React.createElement("div",{style:{marginTop:12,padding:"10px 12px",background:"rgba(255,255,255,0.04)",borderRadius:10,fontSize:12}},
+          React.createElement("span",{style:{opacity:0.6}},"Häufigste Motivation: "),
+          React.createElement("span",{style:{fontWeight:700,color:dominant.color}},dominant.name)
+        )
+      ),
+      // Weekly dot trail
+      recentWeeks.length>0&&React.createElement(Card,null,
+        React.createElement("div",{style:{fontSize:13,fontWeight:700,color:C.accent,marginBottom:12}},"Letzte "+recentWeeks.length+" Wochen"),
+        React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:8}},
+          motWeekData.map((d,i)=>React.createElement("div",{key:i,style:{textAlign:"center"}},
+            React.createElement("div",{style:{width:28,height:28,borderRadius:"50%",background:d.color,margin:"0 auto",boxShadow:d.value?"0 0 8px "+d.color:"none"}}),
+            React.createElement("div",{style:{fontSize:9,opacity:0.5,marginTop:4}},d.week)
+          ))
+        )
+      ),
+      // Recent notes
+      Object.keys(player.notes||{}).length>0&&React.createElement(Card,null,
+        React.createElement("div",{style:{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}},"Letzte Notizen"),
+        React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:10}},
+          Object.entries(player.notes||{}).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,4).map(([week,text])=>
+            React.createElement("div",{key:week,style:{borderLeft:"2px solid "+C.accent,paddingLeft:10}},
+              React.createElement("div",{style:{fontSize:10,opacity:0.5,marginBottom:3}},week),
+              React.createElement("div",{style:{fontSize:12,lineHeight:1.5,opacity:0.85}},text)
+            )
+          )
+        )
+      )
+    );
+  }
+
+  // ── Tab: Anwesenheit ──────────────────────────────────────────────────────
+  function TabAnwesenheit(){
+    // Group by month
+    const byMonth={};
+    attDays.forEach(d=>{
+      const m=d.slice(0,7);
+      if(!byMonth[m])byMonth[m]={present:0,absent:0,total:0};
+      byMonth[m].total++;
+      if(attData[d]===true)byMonth[m].present++;
+      else if(attData[d]===false)byMonth[m].absent++;
+    });
+    const monthEntries=Object.entries(byMonth).sort((a,b)=>a[0].localeCompare(b[0]));
+    const monthChartData=monthEntries.map(([m,v])=>{
+      const mo=MONTHS.find(x=>x.key===m);
+      return{label:mo?mo.label:m,rate:v.total>0?Math.round((v.present/v.total)*100):0,present:v.present,absent:v.absent};
+    });
+    return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:12}},
+      // Summary
+      React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}},
+        [
+          {label:"Anwesend",value:presentDays,color:"#22c55e"},
+          {label:"Gefehlt",value:absentDays,color:"#ef4444"},
+          {label:"Quote",value:attendanceRate+"%",color:C.accent},
+        ].map((s,i)=>React.createElement(Card,{key:i,style:{textAlign:"center",padding:"14px 8px"}},
+          React.createElement("div",{style:{fontSize:24,fontWeight:800,color:s.color}},s.value),
+          React.createElement("div",{style:{fontSize:11,opacity:0.6,marginTop:3}},s.label)
+        ))
+      ),
+      // Monthly breakdown
+      monthChartData.length>0&&React.createElement(Card,null,
+        React.createElement("div",{style:{fontSize:13,fontWeight:700,color:C.accent,marginBottom:12}},"Anwesenheit pro Monat"),
+        React.createElement(ResponsiveContainer,{width:"100%",height:160},
+          React.createElement(LineChart,{data:monthChartData,margin:{top:4,right:8,bottom:0,left:0}},
+            React.createElement(CartesianGrid,{stroke:"rgba(255,255,255,0.06)"}),
+            React.createElement(XAxis,{dataKey:"label",stroke:"rgba(255,255,255,0.4)",tick:{fontSize:10}}),
+            React.createElement(YAxis,{stroke:"rgba(255,255,255,0.4)",tick:{fontSize:10},width:34,domain:[0,100],unit:"%"}),
+            React.createElement(Tooltip,{contentStyle:{background:"#060c27",border:"1px solid "+C.accent,borderRadius:8,color:"#fff",fontSize:12},formatter:v=>[v+"%","Anwesenheitsquote"]}),
+            React.createElement(Line,{type:"monotone",dataKey:"rate",stroke:"#22c55e",strokeWidth:2.5,dot:{r:3,fill:"#22c55e"},activeDot:{r:5}})
+          )
+        )
+      ),
+      // Monthly detail bars
+      monthChartData.length>0&&React.createElement(Card,null,
+        React.createElement("div",{style:{fontSize:13,fontWeight:700,color:C.accent,marginBottom:12}},"Details"),
+        React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:8}},
+          monthChartData.map((d,i)=>React.createElement("div",{key:i},
+            React.createElement("div",{style:{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3}},
+              React.createElement("span",{style:{fontWeight:600}},d.label),
+              React.createElement("span",{style:{color:d.rate>=75?"#22c55e":d.rate>=50?"#eab308":"#ef4444",fontWeight:700}},d.rate+"%  ("+d.present+" / "+(d.present+d.absent)+")")
+            ),
+            React.createElement("div",{style:{height:5,background:"rgba(255,255,255,0.08)",borderRadius:3}},
+              React.createElement("div",{style:{width:d.rate+"%",height:"100%",background:d.rate>=75?"#22c55e":d.rate>=50?"#eab308":"#ef4444",borderRadius:3}})
+            )
+          ))
+        )
+      )
+    );
+  }
+
+  // ── Tab: Gewicht ──────────────────────────────────────────────────────────
+  function TabGewicht(){
+    const chartData=weightSeries.map(s=>{
+      const mo=MONTHS.find(x=>x.key===s.month);
+      return{label:mo?mo.label:s.month,value:s.value};
+    });
+    const first=weightSeries[0];
+    const last=weightSeries[weightSeries.length-1];
+    const diff=first&&last?Math.round((last.value-first.value)*10)/10:null;
+    const minW=chartData.length>0?Math.min(...chartData.map(d=>d.value)):null;
+    const maxW=chartData.length>0?Math.max(...chartData.map(d=>d.value)):null;
+    return React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:12}},
+      first&&last&&React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}},
+        [
+          {label:"Start",value:first.value+" kg",color:"rgba(255,255,255,0.7)"},
+          {label:"Aktuell",value:last.value+" kg",color:C.accent},
+          {label:"Veränderung",value:(diff>0?"+":"")+diff+" kg",color:diff<0?"#22c55e":diff>0?"#ef4444":C.accent},
+        ].map((s,i)=>React.createElement(Card,{key:i,style:{textAlign:"center",padding:"14px 8px"}},
+          React.createElement("div",{style:{fontSize:18,fontWeight:800,color:s.color}},s.value),
+          React.createElement("div",{style:{fontSize:11,opacity:0.6,marginTop:3}},s.label)
+        ))
+      ),
+      chartData.length>1?React.createElement(Card,null,
+        React.createElement("div",{style:{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}},"Gewichtsverlauf"),
+        React.createElement(ResponsiveContainer,{width:"100%",height:180},
+          React.createElement(LineChart,{data:chartData,margin:{top:4,right:8,bottom:0,left:0}},
+            React.createElement(CartesianGrid,{stroke:"rgba(255,255,255,0.06)"}),
+            React.createElement(XAxis,{dataKey:"label",stroke:"rgba(255,255,255,0.4)",tick:{fontSize:10}}),
+            React.createElement(YAxis,{stroke:"rgba(255,255,255,0.4)",tick:{fontSize:10},width:38,domain:["auto","auto"]}),
+            React.createElement(Tooltip,{contentStyle:{background:"#060c27",border:"1px solid "+C.accent,borderRadius:8,color:"#fff",fontSize:12},formatter:v=>[v+" kg","Gewicht"]}),
+            React.createElement(Line,{type:"monotone",dataKey:"value",stroke:C.accent,strokeWidth:2.5,dot:{r:3,fill:C.accent},activeDot:{r:5}})
+          )
+        ),
+        minW&&React.createElement("div",{style:{display:"flex",justifyContent:"space-between",marginTop:8,fontSize:11,opacity:0.5}},
+          React.createElement("span",null,"Min: "+minW+" kg"),
+          React.createElement("span",null,"Max: "+maxW+" kg")
+        )
+      ):React.createElement(Card,null,
+        React.createElement("p",{style:{textAlign:"center",opacity:0.4,fontSize:13,padding:"20px 0"}},"Noch keine Gewichtsdaten")
+      )
+    );
+  }
+
+  const tabContent={gesamt:TabGesamt,kraft:TabKraft,motivation:TabMotivation,anwesenheit:TabAnwesenheit,gewicht:TabGewicht};
+  const ActiveTab=tabContent[activeTab];
+
+  return React.createElement("div",null,
+    // Tab bar
+    React.createElement("div",{style:{display:"flex",gap:6,overflowX:"auto",marginBottom:14,paddingBottom:4,scrollbarWidth:"none"}},
+      TABS.map(t=>React.createElement(Btn,{
+        key:t.id,onClick:()=>setActiveTab(t.id),
+        style:{flexShrink:0,background:activeTab===t.id?C.accent:"rgba(255,255,255,0.06)",
+          color:activeTab===t.id?"#060c27":C.text,
+          border:"1px solid "+(activeTab===t.id?C.accent:C.cardBorder),
+          borderRadius:20,padding:"7px 14px",fontSize:13,fontWeight:activeTab===t.id?700:400,
+          whiteSpace:"nowrap"}
+      },t.label))
+    ),
+    React.createElement(ActiveTab,null)
+  );
+}
+
 function PlayerDetail({player,onBack,onUpdate,onDelete}){
+  const [detailTab,setDetailTab]=useState("dashboard"); // "dashboard" | "detail"
   const [editInfo,setEditInfo]=useState(false);
   const [form,setForm]=useState({...player});
   const [saving,setSaving]=useState(false);
@@ -1992,8 +2349,17 @@ function PlayerDetail({player,onBack,onUpdate,onDelete}){
   }
 
   return React.createElement("div",null,
-    React.createElement("button",{onClick:onBack,style:{background:"none",border:"none",color:C.accent,fontSize:15,cursor:"pointer",padding:0,marginBottom:16,fontFamily:"inherit"}},"‹ Zurück zum Kader"),
+    React.createElement("button",{onClick:onBack,style:{background:"none",border:"none",color:C.accent,fontSize:15,cursor:"pointer",padding:0,marginBottom:12,fontFamily:"inherit"}},"‹ Zurück zum Kader"),
 
+    // Main tab switcher: Dashboard vs Detail
+    React.createElement("div",{style:{display:"flex",gap:8,marginBottom:16}},
+      React.createElement(Btn,{onClick:()=>setDetailTab("dashboard"),style:{flex:1,background:detailTab==="dashboard"?C.accent:"rgba(255,255,255,0.06)",color:detailTab==="dashboard"?"#060c27":C.text,border:"1px solid "+(detailTab==="dashboard"?C.accent:C.cardBorder),borderRadius:12,padding:"10px",fontWeight:700,fontSize:14}},"📊 Dashboard"),
+      React.createElement(Btn,{onClick:()=>setDetailTab("detail"),style:{flex:1,background:detailTab==="detail"?C.accent:"rgba(255,255,255,0.06)",color:detailTab==="detail"?"#060c27":C.text,border:"1px solid "+(detailTab==="detail"?C.accent:C.cardBorder),borderRadius:12,padding:"10px",fontWeight:700,fontSize:14}},"⚙️ Verwaltung")
+    ),
+
+    detailTab==="dashboard"&&React.createElement(PlayerDashboard,{player}),
+
+    detailTab==="detail"&&React.createElement(React.Fragment,null,
     React.createElement(Card,{style:{marginBottom:14}},
       React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}},
         React.createElement("h2",{style:{fontFamily:"'Saira Condensed',sans-serif",fontSize:26,margin:0,fontWeight:700}},player.name),
@@ -2062,7 +2428,9 @@ function PlayerDetail({player,onBack,onUpdate,onDelete}){
     ),
 
     React.createElement(MotivationSection,{player,onUpdate}),
-    React.createElement(NotesSection,{player,onUpdate}),
+    React.createElement(NotesSection,{player,onUpdate})
+    ), // end detailTab==="detail" Fragment
+
     prToast&&React.createElement(Toast,{msg:prToast,onDone:()=>setPrToast(null)})
   );
 }
